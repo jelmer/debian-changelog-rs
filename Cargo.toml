@@ -1,5 +1,5 @@
 [package]
-name = "debian-changelog-rs"
+name = "debian-changelog"
 version = "0.1.0"
 edition = "2021"
 
