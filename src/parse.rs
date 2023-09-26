@@ -154,20 +154,29 @@ fn parse(text: &str) -> Parse {
             self.builder.start_node(ENTRY.into());
             self.parse_entry_header();
             loop {
-                match self.current() {
+                match self
+                    .tokens
+                    .last()
+                    .map(|(kind, token)| (kind, token.as_str()))
+                {
                     None => {
                         self.error("unexpected end of file".to_string());
                         break;
                     }
                     // empty line
-                    Some(NEWLINE) => {
+                    Some((NEWLINE, _)) => {
+                        self.builder.start_node(EMPTY_LINE.into());
                         self.bump();
+                        self.builder.finish_node();
                     }
-                    Some(INDENT) if self.tokens.last().unwrap().1.len() == 2 => {
+                    // details
+                    Some((INDENT, "  ")) => {
                         self.parse_entry_detail();
                     }
-                    Some(INDENT) if self.tokens.last().unwrap().1.len() == 1 => {
+                    // footer
+                    Some((INDENT, " -- ")) => {
                         self.parse_entry_footer();
+                        break;
                     }
                     _ => break,
                 }
@@ -177,6 +186,7 @@ fn parse(text: &str) -> Parse {
         }
 
         pub fn parse_entry_detail(&mut self) {
+            self.builder.start_node(ENTRY_BODY.into());
             self.expect(INDENT);
 
             match self.current() {
@@ -190,38 +200,70 @@ fn parse(text: &str) -> Parse {
             }
 
             self.expect(NEWLINE);
+            self.builder.finish_node();
         }
 
         pub fn parse_entry_footer(&mut self) {
-            self.expect(INDENT);
+            self.builder.start_node(ENTRY_FOOTER.into());
 
-            self.expect(DASHES);
-
-            self.expect(WHITESPACE);
+            if self.current() != Some(INDENT) {
+                self.error("expected indent".to_string());
+            } else {
+                let dashes = &self.tokens.last().unwrap().1;
+                if dashes != " -- " {
+                    self.error("expected --".to_string());
+                } else {
+                    self.bump();
+                }
+            }
 
             self.builder.start_node(MAINTAINER.into());
-            self.expect(TEXT);
+            while self.current() == Some(TEXT)
+                || (self.current() == Some(WHITESPACE) && self.next() != Some(EMAIL))
+            {
+                self.bump();
+            }
             self.builder.finish_node();
 
             self.expect(WHITESPACE);
 
-            self.builder.start_node(EMAIL.into());
-            self.expect(TEXT);
-            self.builder.finish_node();
+            self.expect(EMAIL);
 
             self.expect(WHITESPACE);
-            self.expect(TEXT);
+
+            self.builder.start_node(TIMESTAMP.into());
+            loop {
+                if self.current() != Some(TEXT) && self.current() != Some(WHITESPACE) {
+                    break;
+                }
+                self.bump();
+            }
+            self.builder.finish_node();
+
             self.expect(NEWLINE);
+            self.builder.finish_node();
         }
 
         fn parse(mut self) -> Parse {
             // Make sure that the root node covers all source
             self.builder.start_node(ROOT.into());
-            while self.current().is_some() {
-                self.parse_entry();
+            loop {
+                match self.current() {
+                    None => break,
+                    Some(NEWLINE) => {
+                        self.builder.start_node(EMPTY_LINE.into());
+                        self.bump();
+                        self.builder.finish_node();
+                    }
+                    Some(IDENTIFIER) => {
+                        self.parse_entry();
+                    }
+                    t => {
+                        self.error(format!("unexpected token {:?}", t));
+                        break;
+                    }
+                }
             }
-            // Don't forget to eat *trailing* whitespace
-            self.skip_ws();
             // Close the root node.
             self.builder.finish_node();
 
@@ -239,6 +281,12 @@ fn parse(text: &str) -> Parse {
         /// Peek at the first unprocessed token
         fn current(&self) -> Option<SyntaxKind> {
             self.tokens.last().map(|(kind, _)| *kind)
+        }
+
+        fn next(&self) -> Option<SyntaxKind> {
+            self.tokens
+                .get(self.tokens.len() - 2)
+                .map(|(kind, _)| *kind)
         }
 
         fn expect(&mut self, expected: SyntaxKind) {
@@ -358,8 +406,7 @@ breezy (3.3.3-2) unstable; urgency=medium
  -- Jelmer Vernooĳ <jelmer@debian.org>  Sat, 24 Jun 2023 14:58:57 +0100
 "#;
     let parsed = parse(CHANGELOG);
-    eprintln!("{:#?}", parsed.syntax());
-    //assert_eq!(parsed.errors, Vec::<String>::new());
+    assert_eq!(parsed.errors, Vec::<String>::new());
     let node = parsed.syntax();
     assert_eq!(
         format!("{:#?}", node),

@@ -17,12 +17,8 @@ pub enum SyntaxKind {
     SEMICOLON, // ";"
     EQUALS,    // "="
     DETAIL,    // "* New upstream release."
-    DASHES,    // "--"
-    TIMESTAMP,
-    MAINTAINER,
-    EMAIL,
-    NEWLINE, // newlines are explicit
-    ERROR,   // as well as errors
+    NEWLINE,   // newlines are explicit
+    ERROR,     // as well as errors
 
     // composite nodes
     ROOT,  // The entire file
@@ -35,6 +31,11 @@ pub enum SyntaxKind {
     METADATA_VALUE,
     ENTRY_BODY,
     DISTRIBUTIONS,
+    EMPTY_LINE,
+
+    TIMESTAMP,
+    MAINTAINER,
+    EMAIL,
 }
 
 /// Convert our `SyntaxKind` into the rowan `SyntaxKind`.

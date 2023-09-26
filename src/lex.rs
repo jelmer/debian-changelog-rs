@@ -79,12 +79,14 @@ impl<'a> Lexer<'a> {
                     Some((SyntaxKind::IDENTIFIER, identifier))
                 }
                 (c, None) if Self::is_whitespace(c) => {
-                    let indent = self.read_while_n(2, |c| c == ' ');
-                    self.line_type = match indent.len() {
-                        2 => Some(LineType::Body),
-                        1 => Some(LineType::Footer),
-                        _ => unreachable!(),
-                    };
+                    let mut indent = self.read_while_n(2, |c| c == ' ');
+                    if indent.len() == 1 {
+                        let dashes = self.read_while(|c| c == '-' || c == ' ');
+                        indent.push_str(dashes.as_str());
+                        self.line_type = Some(LineType::Footer);
+                    } else {
+                        self.line_type = Some(LineType::Body);
+                    }
                     Some((SyntaxKind::INDENT, indent))
                 }
                 (c, _) if Self::is_newline(c) => {
@@ -123,21 +125,20 @@ impl<'a> Lexer<'a> {
                     Some((SyntaxKind::WHITESPACE, ws))
                 }
 
-                ('-', Some(LineType::Footer)) => {
-                    let dashes = self.read_while(|c| c == '-');
-                    Some((SyntaxKind::DASHES, dashes))
-                }
                 ('<', Some(LineType::Footer)) => {
                     let email = self.read_while(|c| c != '>' && c != ' ' && !Self::is_newline(c));
-                    if self.input.next() == Some('>') {
-                        Some((SyntaxKind::EMAIL, email))
+                    let n = self.input.next();
+                    if n == Some('>') {
+                        Some((SyntaxKind::EMAIL, email + n.unwrap().to_string().as_str()))
+                    } else if let Some(n) = n {
+                        Some((SyntaxKind::ERROR, email + n.to_string().as_str()))
                     } else {
                         Some((SyntaxKind::ERROR, email))
                     }
                 }
                 (c, Some(LineType::Footer)) if !Self::is_whitespace(c) && !Self::is_newline(c) => {
                     let identifier =
-                        self.read_while(|c| c != '<' && !Self::is_newline(c) && c != ' ');
+                        self.read_while(|c| c != ' ' && c != '<' && !Self::is_newline(c));
                     Some((SyntaxKind::TEXT, identifier))
                 }
                 (_, _) => {
@@ -203,14 +204,24 @@ mod tests {
                 (DETAIL, "* New upstream release."),
                 (NEWLINE, "\n"),
                 (NEWLINE, "\n"),
-                (INDENT, " "),
-                (DASHES, "--"),
+                (INDENT, " -- "),
+                (TEXT, "Jelmer"),
                 (WHITESPACE, " "),
-                (TEXT, "Jelmer Vernooĳ"),
+                (TEXT, "Vernooĳ"),
                 (WHITESPACE, " "),
                 (EMAIL, "<jelmer@debian.org>"),
                 (WHITESPACE, "  "),
-                (TEXT, "Mon, 04 Sep 2023 18:13:45 -0000"),
+                (TEXT, "Mon,"),
+                (WHITESPACE, " "),
+                (TEXT, "04"),
+                (WHITESPACE, " "),
+                (TEXT, "Sep"),
+                (WHITESPACE, " "),
+                (TEXT, "2023"),
+                (WHITESPACE, " "),
+                (TEXT, "18:13:45"),
+                (WHITESPACE, " "),
+                (TEXT, "-0000"),
                 (NEWLINE, "\n")
             ]
         );
