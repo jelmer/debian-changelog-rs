@@ -2,7 +2,7 @@ mod lex;
 mod parse;
 use lazy_regex::regex_captures;
 
-pub use crate::parse::Error;
+pub use crate::parse::{Error, ParseError};
 
 /// See https://manpages.debian.org/bookworm/dpkg-dev/deb-changelog.5.en.html
 
@@ -169,4 +169,29 @@ pub fn get_maintainer_from_env(
 ///     be determined.
 pub fn get_maintainer() -> (Option<String>, Option<String>) {
     get_maintainer_from_env(|s| std::env::var(s).ok())
+}
+
+#[cfg(test)]
+mod get_maintainer_from_env_tests {
+    use super::*;
+
+    #[test]
+    fn test_normal() {
+        get_maintainer();
+    }
+
+    #[test]
+    fn test_env() {
+        let mut d = std::collections::HashMap::new();
+        d.insert("DEBFULLNAME".to_string(), "Jelmer".to_string());
+        d.insert("DEBEMAIL".to_string(), "jelmer@example.com".to_string());
+        let t = get_maintainer_from_env(|s| d.get(s).cloned());
+        assert_eq!(
+            (
+                Some("Jelmer".to_string()),
+                Some("jelmer@example.com".to_string())
+            ),
+            t
+        );
+    }
 }
