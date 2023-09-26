@@ -3,6 +3,7 @@ use crate::SyntaxKind;
 use crate::SyntaxKind::*;
 use chrono::{DateTime, FixedOffset};
 use debversion::Version;
+use rowan::ast::AstNode;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -41,6 +42,29 @@ impl FromStr for Urgency {
     }
 }
 
+#[derive(Debug)]
+pub enum Error {
+    Io(std::io::Error),
+    Parse(ParseError),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match &self {
+            Error::Io(e) => write!(f, "IO error: {}", e),
+            Error::Parse(e) => write!(f, "Parse error: {}", e),
+        }
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(e: std::io::Error) -> Self {
+        Error::Io(e)
+    }
+}
+
+impl std::error::Error for Error {}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ParseError(Vec<String>);
 
@@ -55,11 +79,17 @@ impl std::fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
+impl From<ParseError> for Error {
+    fn from(e: ParseError) -> Self {
+        Error::Parse(e)
+    }
+}
+
 /// Second, implementing the `Language` trait teaches rowan to convert between
 /// these two SyntaxKind types, allowing for a nicer SyntaxNode API where
 /// "kinds" are values from our `enum SyntaxKind`, instead of plain u16 values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-enum Lang {}
+pub enum Lang {}
 impl rowan::Language for Lang {
     type Kind = SyntaxKind;
     fn kind_from_raw(raw: rowan::SyntaxKind) -> Self::Kind {
@@ -377,14 +407,24 @@ macro_rules! ast_node {
         #[derive(PartialEq, Eq, Hash)]
         #[repr(transparent)]
         pub struct $ast(SyntaxNode);
-        impl $ast {
-            #[allow(unused)]
-            fn cast(node: SyntaxNode) -> Option<Self> {
-                if node.kind() == $kind {
-                    Some(Self(node))
+
+        impl AstNode for $ast {
+            type Language = Lang;
+
+            fn can_cast(kind: SyntaxKind) -> bool {
+                kind == $kind
+            }
+
+            fn cast(syntax: SyntaxNode) -> Option<Self> {
+                if Self::can_cast(syntax.kind()) {
+                    Some(Self(syntax))
                 } else {
                     None
                 }
+            }
+
+            fn syntax(&self) -> &SyntaxNode {
+                &self.0
             }
         }
 
@@ -446,15 +486,15 @@ impl ChangeLog {
         }
     }
 
-    pub fn read_path(path: impl AsRef<std::path::Path>) -> Result<ChangeLog, std::io::Error> {
+    pub fn read_path(path: impl AsRef<std::path::Path>) -> Result<ChangeLog, Error> {
         let mut file = std::fs::File::open(path)?;
-        Self::read(&mut file)
+        Ok(Self::read(&mut file)?)
     }
 
-    pub fn read<R: std::io::Read>(mut r: R) -> Result<ChangeLog, std::io::Error> {
+    pub fn read<R: std::io::Read>(mut r: R) -> Result<ChangeLog, Error> {
         let mut buf = String::new();
         r.read_to_string(&mut buf)?;
-        Ok(buf.parse().unwrap())
+        Ok(buf.parse()?)
     }
 }
 
