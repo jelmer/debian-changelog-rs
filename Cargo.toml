@@ -1,5 +1,11 @@
 [package]
 name = "debian-changelog"
+repository = "https://github.com/jelmer/debian-changelog-rs"
+description = "Parser for Debian changelog files"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+m_lexer = "0.0.4"
+rowan = "0.15.11"
 
