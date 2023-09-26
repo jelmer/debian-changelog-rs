@@ -1,15 +1,4 @@
-Debian Changelog parser
-=======================
-
-This crate provides a parse for debian/changelog files, as described in the
-Debian policy,
-[section 4.4](https://www.debian.org/doc/debian-policy/ch-source.html#debian-changelog-debian-changelog).
-
-The parser builds a CST. It preserves formatting, and allows partial parsing.
-
-Example:
-
-```rust
+//! A simple example of parsing a Debian changelog.
 
 use std::io::Read;
 
@@ -28,4 +17,3 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     Ok(())
 }
-```

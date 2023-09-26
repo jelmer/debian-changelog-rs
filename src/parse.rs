@@ -1,7 +1,7 @@
 use crate::lex::lex;
 use crate::SyntaxKind;
 use crate::SyntaxKind::*;
-use chrono::{DateTime, FixedOffset, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, FixedOffset};
 use debversion::Version;
 use std::str::FromStr;
 
@@ -289,6 +289,9 @@ fn parse(text: &str) -> Parse {
                         self.bump();
                         self.builder.finish_node();
                     }
+                    Some(COMMENT) => {
+                        self.bump();
+                    }
                     Some(IDENTIFIER) => {
                         self.parse_entry();
                     }
@@ -403,24 +406,6 @@ ast_node!(Timestamp, TIMESTAMP);
 ast_node!(MetadataEntry, METADATA_ENTRY);
 ast_node!(MetadataKey, METADATA_KEY);
 ast_node!(MetadataValue, METADATA_VALUE);
-
-impl MetadataKey {
-    pub fn text(&self) -> Option<String> {
-        self.0
-            .children_with_tokens()
-            .find(|it| it.kind() == IDENTIFIER)
-            .map(|it| it.into_token().unwrap().text().to_string())
-    }
-}
-
-impl MetadataValue {
-    pub fn value(&self) -> Option<String> {
-        self.0
-            .children_with_tokens()
-            .find(|it| it.kind() == TEXT)
-            .map(|it| it.into_token().unwrap().text().to_string())
-    }
-}
 
 impl MetadataEntry {
     pub fn key(&self) -> Option<String> {
@@ -645,6 +630,7 @@ impl Entry {
     }
 
     pub fn change_lines(&self) -> impl Iterator<Item = String> + '_ {
+        // TODO: empty head and tail empty lines
         self.0.children().filter_map(|n| {
             if let Some(ref change) = EntryBody::cast(n.clone()) {
                 Some(change.text())
@@ -677,13 +663,15 @@ breezy (3.3.3-2) unstable; urgency=medium
   * Drop dependency on cython3-dbg. Closes: #1040544
 
  -- Jelmer Vernooĳ <jelmer@debian.org>  Sat, 24 Jun 2023 14:58:57 +0100
+
+# Oh, and here is a comment
 "#;
     let parsed = parse(CHANGELOG);
     assert_eq!(parsed.errors, Vec::<String>::new());
     let node = parsed.syntax();
     assert_eq!(
         format!("{:#?}", node),
-        r###"ROOT@0..376
+        r###"ROOT@0..405
   ENTRY@0..140
     ENTRY_HEADER@0..39
       IDENTIFIER@0..6 "breezy"
@@ -786,6 +774,9 @@ breezy (3.3.3-2) unstable; urgency=medium
         WHITESPACE@369..370 " "
         TEXT@370..375 "+0100"
       NEWLINE@375..376 "\n"
+  EMPTY_LINE@376..377
+    NEWLINE@376..377 "\n"
+  COMMENT@377..405 "# Oh, and here is a c ..."
 "###
     );
 

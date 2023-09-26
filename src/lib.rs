@@ -19,6 +19,7 @@ pub enum SyntaxKind {
     DETAIL,    // "* New upstream release."
     NEWLINE,   // newlines are explicit
     ERROR,     // as well as errors
+    COMMENT,   // "#"
 
     // composite nodes
     ROOT,  // The entire file

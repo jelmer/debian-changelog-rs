@@ -89,6 +89,15 @@ impl<'a> Lexer<'a> {
                     }
                     Some((SyntaxKind::INDENT, indent))
                 }
+                ('#', None) => {
+                    let comment = self.read_while(|c| !Self::is_newline(c));
+                    let n = self.input.next();
+                    if let Some(n) = n {
+                        Some((SyntaxKind::COMMENT, comment + n.to_string().as_str()))
+                    } else {
+                        Some((SyntaxKind::COMMENT, comment))
+                    }
+                }
                 (c, _) if Self::is_newline(c) => {
                     self.input.next();
                     self.line_type = None;
@@ -182,6 +191,8 @@ mod tests {
   * New upstream release.
 
  -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0000
+
+# Oh, and here is a comment
 "#
             )
             .iter()
@@ -222,7 +233,9 @@ mod tests {
                 (TEXT, "18:13:45"),
                 (WHITESPACE, " "),
                 (TEXT, "-0000"),
-                (NEWLINE, "\n")
+                (NEWLINE, "\n"),
+                (NEWLINE, "\n"),
+                (COMMENT, "# Oh, and here is a comment\n"),
             ]
         );
     }
