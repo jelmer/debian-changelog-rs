@@ -44,3 +44,5 @@ impl From<SyntaxKind> for rowan::SyntaxKind {
         Self(kind as u16)
     }
 }
+
+pub use crate::parse::{ChangeLog, Entry};
