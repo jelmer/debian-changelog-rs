@@ -9,7 +9,6 @@ license = "Apache-2.0"
 [dependencies]
 chrono = "0.4.31"
 debversion = "0.2.1"
-m_lexer = "0.0.4"
 rowan = "0.15.11"
 
 [dev-dependencies]
