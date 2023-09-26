@@ -436,6 +436,17 @@ impl ChangeLog {
     pub fn entries(&self) -> impl Iterator<Item = Entry> + '_ {
         self.0.children().filter_map(Entry::cast)
     }
+
+    pub fn read_path(path: impl AsRef<std::path::Path>) -> Result<ChangeLog, std::io::Error> {
+        let mut file = std::fs::File::open(path)?;
+        Self::read(&mut file)
+    }
+
+    pub fn read<R: std::io::Read>(mut r: R) -> Result<ChangeLog, std::io::Error> {
+        let mut buf = String::new();
+        r.read_to_string(&mut buf)?;
+        Ok(buf.parse().unwrap())
+    }
 }
 
 impl Default for ChangeLog {
@@ -809,4 +820,19 @@ breezy (3.3.3-2) unstable; urgency=medium
     );
 
     assert_eq!(node.text(), CHANGELOG);
+}
+
+#[test]
+fn test_from_io_read() {
+    let changelog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org> Mon, 04 Sep 2023 18:13:45 -0500
+"#;
+
+    let input = changelog.as_bytes();
+    let input = Box::new(std::io::Cursor::new(input)) as Box<dyn std::io::Read>;
+    let parsed = ChangeLog::read(input).unwrap();
+    assert_eq!(parsed.to_string(), changelog);
 }
