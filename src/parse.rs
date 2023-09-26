@@ -437,6 +437,15 @@ impl ChangeLog {
         self.0.children().filter_map(Entry::cast)
     }
 
+    pub fn pop_first(&mut self) -> Option<Entry> {
+        if let Some(entry) = self.entries().next() {
+            entry.0.detach();
+            Some(entry)
+        } else {
+            None
+        }
+    }
+
     pub fn read_path(path: impl AsRef<std::path::Path>) -> Result<ChangeLog, std::io::Error> {
         let mut file = std::fs::File::open(path)?;
         Self::read(&mut file)
@@ -791,7 +800,7 @@ breezy (3.3.3-2) unstable; urgency=medium
 "###
     );
 
-    let root = parsed.root();
+    let mut root = parsed.root();
     let entries: Vec<_> = root.entries().collect();
     assert_eq!(entries.len(), 2);
     let entry = &entries[0];
@@ -820,6 +829,21 @@ breezy (3.3.3-2) unstable; urgency=medium
     );
 
     assert_eq!(node.text(), CHANGELOG);
+
+    let first = root.pop_first().unwrap();
+    assert_eq!(first.version(), Some("3.3.4-1".parse().unwrap()));
+    assert_eq!(
+        root.to_string(),
+        r#"breezy (3.3.3-2) unstable; urgency=medium
+
+  * Drop unnecessary dependency on python3-six. Closes: #1039011
+  * Drop dependency on cython3-dbg. Closes: #1040544
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Sat, 24 Jun 2023 14:58:57 +0100
+
+# Oh, and here is a comment
+"#
+    );
 }
 
 #[test]
