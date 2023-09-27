@@ -521,7 +521,7 @@ impl FromStr for ChangeLog {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parsed = parse(s);
         if parsed.errors.is_empty() {
-            Ok(parsed.root())
+            Ok(parsed.root().clone_for_update())
         } else {
             Err(ParseError(parsed.errors))
         }
@@ -855,7 +855,7 @@ breezy (3.3.3-2) unstable; urgency=medium
 "###
     );
 
-    let root = parsed.root();
+    let mut root = parsed.root().clone_for_update();
     let entries: Vec<_> = root.entries().collect();
     assert_eq!(entries.len(), 2);
     let entry = &entries[0];
@@ -884,7 +884,6 @@ breezy (3.3.3-2) unstable; urgency=medium
     );
 
     assert_eq!(node.text(), CHANGELOG);
-    let mut root = root.clone_for_update();
 
     let first = root.pop_first().unwrap();
     assert_eq!(first.version(), Some("3.3.4-1".parse().unwrap()));
