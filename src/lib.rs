@@ -76,7 +76,7 @@ pub use crate::parse::{ChangeLog, Entry};
 
 pub fn get_maintainer_from_env(
     get_env: impl Fn(&str) -> Option<String>,
-) -> (Option<String>, Option<String>) {
+) -> Option<(String, String)> {
     use nix::unistd;
     use std::io::BufRead;
 
@@ -173,7 +173,11 @@ pub fn get_maintainer_from_env(
         }
     };
 
-    (maintainer, email_address)
+    if let (Some(maintainer), Some(email_address)) = (maintainer, email_address) {
+        Some((maintainer, email_address))
+    } else {
+        None
+    }
 }
 
 /// Get the maintainer information in the same manner as dch.
@@ -190,7 +194,7 @@ pub fn get_maintainer_from_env(
 /// a tuple of the full name, email pair as strings.
 ///     Either of the pair may be None if that value couldn't
 ///     be determined.
-pub fn get_maintainer() -> (Option<String>, Option<String>) {
+pub fn get_maintainer() -> Option<(String, String)> {
     get_maintainer_from_env(|s| std::env::var(s).ok())
 }
 
@@ -210,10 +214,7 @@ mod get_maintainer_from_env_tests {
         d.insert("DEBEMAIL".to_string(), "jelmer@example.com".to_string());
         let t = get_maintainer_from_env(|s| d.get(s).cloned());
         assert_eq!(
-            (
-                Some("Jelmer".to_string()),
-                Some("jelmer@example.com".to_string())
-            ),
+            Some(("Jelmer".to_string(), "jelmer@example.com".to_string())),
             t
         );
     }
@@ -225,10 +226,7 @@ mod get_maintainer_from_env_tests {
         d.insert("EMAIL".to_string(), "foo@example.com".to_string());
         let t = get_maintainer_from_env(|s| d.get(s).cloned());
         assert_eq!(
-            (
-                Some("Jelmer".to_string()),
-                Some("foo@example.com".to_string())
-            ),
+            Some(("Jelmer".to_string(), "foo@example.com".to_string())),
             t
         );
     }

@@ -6,8 +6,9 @@ use debversion::Version;
 use rowan::ast::AstNode;
 use std::str::FromStr;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum Urgency {
+    #[default]
     Low,
     Medium,
     High,
@@ -559,20 +560,19 @@ impl EntryBuilder {
         let mut builder = GreenNodeBuilder::new();
         builder.start_node(ENTRY.into());
         builder.start_node(ENTRY_HEADER.into());
-        builder.token(IDENTIFIER.into(), self.package.as_ref().unwrap());
-        builder.token(WHITESPACE.into(), " ");
-        let v = format!(
-            "({})",
-            self.version
-                .as_ref()
-                .map(|v| v.to_string())
-                .as_ref()
-                .unwrap()
-        );
-        builder.token(VERSION.into(), v.as_str());
-        builder.token(WHITESPACE.into(), " ");
-        builder.start_node(DISTRIBUTIONS.into());
+        if let Some(package) = self.package.as_ref() {
+            builder.token(IDENTIFIER.into(), package.as_str());
+        }
+        if let Some(version) = self.version.as_ref() {
+            builder.token(WHITESPACE.into(), " ");
+            builder.token(
+                VERSION.into(),
+                format!("({})", version.to_string()).as_str(),
+            );
+        }
         if let Some(distributions) = self.distributions.as_ref() {
+            builder.token(WHITESPACE.into(), " ");
+            builder.start_node(DISTRIBUTIONS.into());
             let mut it = distributions.iter().peekable();
             while it.peek().is_some() {
                 builder.token(IDENTIFIER.into(), it.next().unwrap());
@@ -580,11 +580,12 @@ impl EntryBuilder {
                     builder.token(WHITESPACE.into(), " ");
                 }
             }
+            builder.finish_node(); // DISTRIBUTIONS
         }
-        builder.finish_node(); // DISTRIBUTIONS
         let mut metadata = self.metadata().peekable();
         if metadata.peek().is_some() {
             builder.token(SEMICOLON.into(), ";");
+            builder.token(WHITESPACE.into(), " ");
             builder.start_node(METADATA.into());
             for (key, value) in metadata {
                 builder.start_node(METADATA_ENTRY.into());
@@ -620,38 +621,37 @@ impl EntryBuilder {
 
         builder.start_node(ENTRY_FOOTER.into());
         builder.token(INDENT.into(), " -- ");
-        builder.start_node(MAINTAINER.into());
-        let mut it = self.maintainer.as_ref().unwrap().0.split(' ').peekable();
-        while let Some(p) = it.next() {
-            builder.token(TEXT.into(), p);
-            if it.peek().is_some() {
-                builder.token(WHITESPACE.into(), " ");
+        if let Some(maintainer) = self.maintainer.as_ref() {
+            builder.start_node(MAINTAINER.into());
+            let mut it = maintainer.0.split(' ').peekable();
+            while let Some(p) = it.next() {
+                builder.token(TEXT.into(), p);
+                if it.peek().is_some() {
+                    builder.token(WHITESPACE.into(), " ");
+                }
             }
+            builder.finish_node(); // MAINTAINER
         }
-        builder.finish_node(); // MAINTAINER
 
-        builder.token(WHITESPACE.into(), " ");
-        builder.token(
-            EMAIL.into(),
-            format!("<{}>", self.maintainer.as_ref().unwrap().1).as_str(),
-        );
-        builder.token(WHITESPACE.into(), "  ");
+        if let Some(maintainer) = self.maintainer.as_ref() {
+            builder.token(WHITESPACE.into(), " ");
+            builder.token(EMAIL.into(), format!("<{}>", maintainer.1).as_str());
+        }
 
-        builder.start_node(TIMESTAMP.into());
-        let ts = self
-            .timestamp
-            .unwrap_or_else(|| chrono::Utc::now().into())
-            .format("%a, %d %b %Y %H:%M:%S %z")
-            .to_string();
-        let mut it = ts.split(' ').peekable();
-        while let Some(p) = it.next() {
-            builder.token(TEXT.into(), p);
-            if it.peek().is_some() {
-                builder.token(WHITESPACE.into(), " ");
+        if let Some(timestamp) = self.timestamp.as_ref() {
+            builder.token(WHITESPACE.into(), "  ");
+
+            builder.start_node(TIMESTAMP.into());
+            let ts = timestamp.format("%a, %d %b %Y %H:%M:%S %z").to_string();
+            let mut it = ts.split(' ').peekable();
+            while let Some(p) = it.next() {
+                builder.token(TEXT.into(), p);
+                if it.peek().is_some() {
+                    builder.token(WHITESPACE.into(), " ");
+                }
             }
+            builder.finish_node(); // TIMESTAMP
         }
-        builder.finish_node(); // TIMESTAMP
-
         builder.token(NEWLINE.into(), "\n");
         builder.finish_node(); // ENTRY_FOOTER
 
@@ -681,7 +681,7 @@ impl ChangeLog {
         self.0.children().filter_map(Entry::cast)
     }
 
-    pub fn new_entry(&mut self) -> EntryBuilder {
+    pub fn new_empty_entry(&mut self) -> EntryBuilder {
         EntryBuilder {
             root: self.0.clone(),
             package: None,
@@ -690,6 +690,30 @@ impl ChangeLog {
             urgency: None,
             maintainer: None,
             timestamp: None,
+            change_lines: vec![],
+        }
+    }
+
+    pub fn new_entry(&mut self) -> EntryBuilder {
+        let package = self
+            .entries()
+            .next()
+            .and_then(|first_entry| first_entry.package());
+        let mut version = self
+            .entries()
+            .next()
+            .and_then(|first_entry| first_entry.version());
+        if let Some(version) = version.as_mut() {
+            version.increment_debian();
+        }
+        EntryBuilder {
+            root: self.0.clone(),
+            package,
+            version,
+            distributions: Some(vec!["UNRELEASED".into()]),
+            urgency: Some(Urgency::default()),
+            maintainer: crate::get_maintainer(),
+            timestamp: Some(chrono::Utc::now().into()),
             change_lines: vec![],
         }
     }
@@ -1146,11 +1170,49 @@ fn test_new_entry() {
         .datetime("2023-09-04T18:13:45-05:00".parse().unwrap())
         .finish();
     assert_eq!(
-        r###"breezy (3.3.4-1) unstable;urgency=low
+        r###"breezy (3.3.4-1) unstable; urgency=low
 
   * A change.
 
  -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"###,
+        cl.to_string()
+    );
+}
+
+#[test]
+fn test_new_empty_default() {
+    let mut cl = ChangeLog::new();
+    cl.new_entry()
+        .package("breezy".into())
+        .version("3.3.4-1".parse().unwrap())
+        .maintainer("Jelmer Vernooĳ".into(), "jelmer@debian.org".into())
+        .change_line("* A change.".into())
+        .datetime("2023-09-04T18:13:45-05:00".parse().unwrap())
+        .finish();
+    assert_eq!(
+        r###"breezy (3.3.4-1) UNRELEASED; urgency=low
+
+  * A change.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"###,
+        cl.to_string()
+    );
+}
+
+#[test]
+fn test_new_empty_entry() {
+    let mut cl = ChangeLog::new();
+    cl.new_empty_entry()
+        .change_line("* A change.".into())
+        .finish();
+    assert_eq!(
+        r###"
+
+  * A change.
+
+ -- 
 "###,
         cl.to_string()
     );
