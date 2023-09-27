@@ -1,11 +1,12 @@
 Debian Changelog parser
 =======================
 
-This crate provides a parse for debian/changelog files, as described in the
+This crate provides a parser for debian/changelog files, as described in the
 Debian policy,
 [section 4.4](https://www.debian.org/doc/debian-policy/ch-source.html#debian-changelog-debian-changelog).
 
-The parser builds a CST. It preserves formatting, and allows partial parsing.
+The parser builds a CST. It is lossless - i.e. preserves formatting, and allows
+editing and partial parsing.
 
 Example:
 
