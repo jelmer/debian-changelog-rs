@@ -486,11 +486,13 @@ impl ChangeLog {
         }
     }
 
+    /// Read a changelog file from a path
     pub fn read_path(path: impl AsRef<std::path::Path>) -> Result<ChangeLog, Error> {
         let mut file = std::fs::File::open(path)?;
-        Ok(Self::read(&mut file)?)
+        Self::read(&mut file)
     }
 
+    /// Read a changelog file from a reader
     pub fn read<R: std::io::Read>(mut r: R) -> Result<ChangeLog, Error> {
         let mut buf = String::new();
         r.read_to_string(&mut buf)?;
@@ -518,6 +520,7 @@ impl FromStr for ChangeLog {
 }
 
 impl EntryHeader {
+    /// Returns the version of the entry.
     pub fn version(&self) -> Option<Version> {
         self.0.children_with_tokens().find_map(|it| {
             if let Some(token) = it.as_token() {
@@ -530,6 +533,7 @@ impl EntryHeader {
         })
     }
 
+    /// Returns the package name of the entry.
     pub fn package(&self) -> Option<String> {
         self.0.children_with_tokens().find_map(|it| {
             if let Some(token) = it.as_token() {
@@ -541,6 +545,7 @@ impl EntryHeader {
         })
     }
 
+    /// Returns the distributions of the entry.
     pub fn distributions(&self) -> Option<Vec<String>> {
         let node = self.0.children().find(|it| it.kind() == DISTRIBUTIONS);
 
@@ -577,6 +582,7 @@ impl EntryHeader {
         })
     }
 
+    /// Returns the urgency of the entry.3
     pub fn urgency(&self) -> Option<Urgency> {
         for (key, value) in self.metadata() {
             if key.as_str() == "urgency" {
@@ -840,7 +846,7 @@ breezy (3.3.3-2) unstable; urgency=medium
 "###
     );
 
-    let mut root = parsed.root();
+    let root = parsed.root();
     let entries: Vec<_> = root.entries().collect();
     assert_eq!(entries.len(), 2);
     let entry = &entries[0];

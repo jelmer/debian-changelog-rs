@@ -1,3 +1,26 @@
+//! A lossless parser for Debian changelog files.
+//!
+//! As documented in Debian Policy:
+//! https://www.debian.org/doc/debian-policy/ch-source.html#debian-changelog-debian-changelog
+//!
+//! Example:
+//!
+//! ```rust
+//! use std::io::Read;
+//! let file = std::fs::File::open("/usr/share/doc/rustc/changelog.Debian.gz").unwrap();
+//! let mut gz = flate2::read::GzDecoder::new(file);
+//! let mut contents = String::new();
+//! gz.read_to_string(&mut contents).unwrap();
+//! let changelog: debian_changelog::ChangeLog = contents.parse().unwrap();
+//! for entry in changelog.entries() {
+//!     println!(
+//!         "{}: {}",
+//!         entry.package().unwrap(),
+//!         entry.version().unwrap().to_string()
+//!     );
+//! }
+//! ```
+
 mod lex;
 mod parse;
 use lazy_regex::regex_captures;
@@ -181,7 +204,7 @@ mod get_maintainer_from_env_tests {
     }
 
     #[test]
-    fn test_env() {
+    fn test_deb_vars() {
         let mut d = std::collections::HashMap::new();
         d.insert("DEBFULLNAME".to_string(), "Jelmer".to_string());
         d.insert("DEBEMAIL".to_string(), "jelmer@example.com".to_string());
@@ -190,6 +213,21 @@ mod get_maintainer_from_env_tests {
             (
                 Some("Jelmer".to_string()),
                 Some("jelmer@example.com".to_string())
+            ),
+            t
+        );
+    }
+
+    #[test]
+    fn test_email_var() {
+        let mut d = std::collections::HashMap::new();
+        d.insert("NAME".to_string(), "Jelmer".to_string());
+        d.insert("EMAIL".to_string(), "foo@example.com".to_string());
+        let t = get_maintainer_from_env(|s| d.get(s).cloned());
+        assert_eq!(
+            (
+                Some("Jelmer".to_string()),
+                Some("foo@example.com".to_string())
             ),
             t
         );
