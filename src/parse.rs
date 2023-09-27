@@ -909,42 +909,51 @@ impl Entry {
         self.0.children().find_map(EntryFooter::cast)
     }
 
+    /// Return the package name of the entry.
     pub fn package(&self) -> Option<String> {
         self.header().and_then(|h| h.package())
     }
 
+    /// Return the version of the entry.
     pub fn version(&self) -> Option<Version> {
         self.header().and_then(|h| h.version())
     }
 
+    /// Return the distributions of the entry.
     pub fn distributions(&self) -> Option<Vec<String>> {
         self.header().and_then(|h| h.distributions())
     }
 
-    pub fn changes(&self) -> impl Iterator<Item = EntryBody> + '_ {
+    fn changes(&self) -> impl Iterator<Item = EntryBody> + '_ {
         self.0.children().filter_map(EntryBody::cast)
     }
 
+    /// Returns the email address of the maintainer.
     pub fn email(&self) -> Option<String> {
         self.footer().and_then(|f| f.email())
     }
 
+    /// Returns the name of the maintainer.
     pub fn maintainer(&self) -> Option<String> {
         self.footer().and_then(|f| f.maintainer())
     }
 
+    /// Returns the timestamp of the entry, as the raw string.
     pub fn timestamp(&self) -> Option<String> {
         self.footer().and_then(|f| f.timestamp())
     }
 
+    /// Returns the datetime of the entry.
     pub fn datetime(&self) -> Option<DateTime<FixedOffset>> {
         self.timestamp().and_then(|ts| parse_time_string(&ts).ok())
     }
 
+    /// Returns the urgency of the entry.
     pub fn urgency(&self) -> Option<Urgency> {
         self.header().and_then(|h| h.urgency())
     }
 
+    /// Returns the changes of the entry.
     pub fn change_lines(&self) -> impl Iterator<Item = String> + '_ {
         // TODO: empty head and tail empty lines
         self.0.children().filter_map(|n| {
@@ -955,6 +964,13 @@ impl Entry {
             } else {
                 None
             }
+        })
+    }
+
+    pub fn is_unreleased(&self) -> Option<bool> {
+        self.distributions().as_ref().map(|ds| {
+            let ds = ds.iter().map(|d| d.as_str()).collect::<Vec<&str>>();
+            crate::distributions_is_unreleased(ds.as_slice())
         })
     }
 }
@@ -1178,6 +1194,8 @@ fn test_new_entry() {
 "###,
         cl.to_string()
     );
+
+    assert!(!cl.entries().next().unwrap().is_unreleased().unwrap());
 }
 
 #[test]
@@ -1216,4 +1234,5 @@ fn test_new_empty_entry() {
 "###,
         cl.to_string()
     );
+    assert_eq!(cl.entries().next().unwrap().is_unreleased(), None);
 }

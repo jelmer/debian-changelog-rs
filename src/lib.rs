@@ -231,3 +231,24 @@ mod get_maintainer_from_env_tests {
         );
     }
 }
+
+/// Check if the given distribution marks an unreleased entry.
+pub fn distribution_is_unreleased(distribution: &str) -> bool {
+    distribution == "UNRELEASED" || distribution.starts_with("UNRELEASED-")
+}
+
+/// Check if any of the given distributions marks an unreleased entry.
+pub fn distributions_is_unreleased(distributions: &[&str]) -> bool {
+    distributions.iter().any(|x| distribution_is_unreleased(x))
+}
+
+#[test]
+fn test_distributions_is_unreleased() {
+    assert!(distributions_is_unreleased(&["UNRELEASED"]));
+    assert!(distributions_is_unreleased(&[
+        "UNRELEASED-1",
+        "UNRELEASED-2"
+    ]));
+    assert!(distributions_is_unreleased(&["UNRELEASED", "UNRELEASED-2"]));
+    assert!(!distributions_is_unreleased(&["stable"]));
+}
