@@ -478,7 +478,16 @@ impl ChangeLog {
     }
 
     pub fn pop_first(&mut self) -> Option<Entry> {
-        if let Some(entry) = self.entries().next() {
+        let mut it = self.entries();
+        if let Some(entry) = it.next() {
+            // Drop trailing newlines
+            while let Some(sibling) = entry.syntax().next_sibling() {
+                if sibling.kind() == EMPTY_LINE {
+                    sibling.detach();
+                } else {
+                    break;
+                }
+            }
             entry.0.detach();
             Some(entry)
         } else {
@@ -875,24 +884,22 @@ breezy (3.3.3-2) unstable; urgency=medium
     );
 
     assert_eq!(node.text(), CHANGELOG);
+    let mut root = root.clone_for_update();
 
-    /*
-        let first = root.pop_first().unwrap();
-        assert_eq!(first.version(), Some("3.3.4-1".parse().unwrap()));
-        assert_eq!(
-            root.to_string(),
-            r#"breezy (3.3.3-2) unstable; urgency=medium
+    let first = root.pop_first().unwrap();
+    assert_eq!(first.version(), Some("3.3.4-1".parse().unwrap()));
+    assert_eq!(
+        root.to_string(),
+        r#"breezy (3.3.3-2) unstable; urgency=medium
 
-      * Drop unnecessary dependency on python3-six. Closes: #1039011
-      * Drop dependency on cython3-dbg. Closes: #1040544
+  * Drop unnecessary dependency on python3-six. Closes: #1039011
+  * Drop dependency on cython3-dbg. Closes: #1040544
 
-     -- Jelmer Vernooĳ <jelmer@debian.org>  Sat, 24 Jun 2023 14:58:57 +0100
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Sat, 24 Jun 2023 14:58:57 +0100
 
-    # Oh, and here is a comment
-    "#
-        );
-
-        */
+# Oh, and here is a comment
+"#
+    );
 }
 
 #[test]
