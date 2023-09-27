@@ -294,9 +294,16 @@ fn parse(text: &str) -> Parse {
 
             self.expect(EMAIL);
 
-            self.expect(WHITESPACE);
+            if self.tokens.last().map(|(k, t)| (*k, t.as_str())) == Some((WHITESPACE, "  ")) {
+                self.bump();
+            } else if self.current() == Some(WHITESPACE) {
+                self.error("expected two spaces".to_string());
+            } else {
+                self.error("expected whitespace".to_string());
+            }
 
             self.builder.start_node(TIMESTAMP.into());
+
             loop {
                 if self.current() != Some(TEXT) && self.current() != Some(WHITESPACE) {
                     break;
@@ -463,18 +470,228 @@ impl MetadataEntry {
     }
 }
 
+pub struct EntryBuilder {
+    root: SyntaxNode,
+    package: Option<String>,
+    version: Option<Version>,
+    distributions: Option<Vec<String>>,
+    urgency: Option<Urgency>,
+    maintainer: Option<(String, String)>,
+    timestamp: Option<chrono::DateTime<FixedOffset>>,
+    change_lines: Vec<String>,
+}
+
+impl EntryBuilder {
+    pub fn package(mut self, package: String) -> Self {
+        self.package = Some(package);
+        self
+    }
+
+    pub fn version(mut self, version: Version) -> Self {
+        self.version = Some(version);
+        self
+    }
+
+    pub fn distributions(mut self, distributions: Vec<String>) -> Self {
+        self.distributions = Some(distributions);
+        self
+    }
+
+    pub fn distribution(mut self, distribution: String) -> Self {
+        self.distributions
+            .get_or_insert_with(Vec::new)
+            .push(distribution);
+        self
+    }
+
+    pub fn urgency(mut self, urgency: Urgency) -> Self {
+        self.urgency = Some(urgency);
+        self
+    }
+
+    pub fn maintainer(mut self, maintainer: String, email: String) -> Self {
+        self.maintainer = Some((maintainer, email));
+        self
+    }
+
+    pub fn datetime(mut self, timestamp: chrono::DateTime<FixedOffset>) -> Self {
+        self.timestamp = Some(timestamp);
+        self
+    }
+
+    pub fn change_line(mut self, line: String) -> Self {
+        self.change_lines.push(line);
+        self
+    }
+
+    pub fn verify(&self) -> Result<(), String> {
+        if self.package.is_none() {
+            return Err("package is required".to_string());
+        }
+        if self.version.is_none() {
+            return Err("version is required".to_string());
+        }
+        match self.distributions {
+            None => {
+                return Err("at least one distribution is required".to_string());
+            }
+            Some(ref distributions) => {
+                if distributions.is_empty() {
+                    return Err("at least one distribution is required".to_string());
+                }
+            }
+        }
+        if self.change_lines.is_empty() {
+            return Err("at least one change line is required".to_string());
+        }
+        Ok(())
+    }
+
+    fn metadata(&self) -> impl Iterator<Item = (String, String)> {
+        let mut ret = vec![];
+        if let Some(urgency) = self.urgency.as_ref() {
+            ret.push(("urgency".to_string(), urgency.to_string()));
+        }
+        ret.into_iter()
+    }
+
+    pub fn finish(self) {
+        let mut builder = GreenNodeBuilder::new();
+        builder.start_node(ENTRY.into());
+        builder.start_node(ENTRY_HEADER.into());
+        builder.token(IDENTIFIER.into(), self.package.as_ref().unwrap());
+        builder.token(WHITESPACE.into(), " ");
+        let v = format!(
+            "({})",
+            self.version
+                .as_ref()
+                .map(|v| v.to_string())
+                .as_ref()
+                .unwrap()
+        );
+        builder.token(VERSION.into(), v.as_str());
+        builder.token(WHITESPACE.into(), " ");
+        builder.start_node(DISTRIBUTIONS.into());
+        if let Some(distributions) = self.distributions.as_ref() {
+            let mut it = distributions.iter().peekable();
+            while it.peek().is_some() {
+                builder.token(IDENTIFIER.into(), it.next().unwrap());
+                if it.peek().is_some() {
+                    builder.token(WHITESPACE.into(), " ");
+                }
+            }
+        }
+        builder.finish_node(); // DISTRIBUTIONS
+        let mut metadata = self.metadata().peekable();
+        if metadata.peek().is_some() {
+            builder.token(SEMICOLON.into(), ";");
+            builder.start_node(METADATA.into());
+            for (key, value) in metadata {
+                builder.start_node(METADATA_ENTRY.into());
+                builder.start_node(METADATA_KEY.into());
+                builder.token(IDENTIFIER.into(), key.as_str());
+                builder.finish_node(); // METADATA_KEY
+                builder.token(EQUALS.into(), "=");
+                builder.start_node(METADATA_VALUE.into());
+                builder.token(METADATA_VALUE.into(), value.as_str());
+                builder.finish_node(); // METADATA_VALUE
+                builder.finish_node(); // METADATA_ENTRY
+            }
+            builder.finish_node(); // METADATA
+        }
+        builder.token(NEWLINE.into(), "\n");
+        builder.finish_node(); // ENTRY_HEADER
+
+        builder.start_node(EMPTY_LINE.into());
+        builder.token(NEWLINE.into(), "\n");
+        builder.finish_node(); // EMPTY_LINE
+
+        for line in self.change_lines {
+            builder.start_node(ENTRY_BODY.into());
+            builder.token(INDENT.into(), "  ");
+            builder.token(DETAIL.into(), line.as_str());
+            builder.token(NEWLINE.into(), "\n");
+            builder.finish_node(); // ENTRY_BODY
+        }
+
+        builder.start_node(EMPTY_LINE.into());
+        builder.token(NEWLINE.into(), "\n");
+        builder.finish_node(); // EMPTY_LINE
+
+        builder.start_node(ENTRY_FOOTER.into());
+        builder.token(INDENT.into(), " -- ");
+        builder.start_node(MAINTAINER.into());
+        let mut it = self.maintainer.as_ref().unwrap().0.split(' ').peekable();
+        while let Some(p) = it.next() {
+            builder.token(TEXT.into(), p);
+            if it.peek().is_some() {
+                builder.token(WHITESPACE.into(), " ");
+            }
+        }
+        builder.finish_node(); // MAINTAINER
+
+        builder.token(WHITESPACE.into(), " ");
+        builder.token(
+            EMAIL.into(),
+            format!("<{}>", self.maintainer.as_ref().unwrap().1).as_str(),
+        );
+        builder.token(WHITESPACE.into(), "  ");
+
+        builder.start_node(TIMESTAMP.into());
+        let ts = self
+            .timestamp
+            .unwrap_or_else(|| chrono::Utc::now().into())
+            .format("%a, %d %b %Y %H:%M:%S %z")
+            .to_string();
+        let mut it = ts.split(' ').peekable();
+        while let Some(p) = it.next() {
+            builder.token(TEXT.into(), p);
+            if it.peek().is_some() {
+                builder.token(WHITESPACE.into(), " ");
+            }
+        }
+        builder.finish_node(); // TIMESTAMP
+
+        builder.token(NEWLINE.into(), "\n");
+        builder.finish_node(); // ENTRY_FOOTER
+
+        builder.finish_node(); // ENTRY
+        self.root.splice_children(
+            0..0,
+            vec![SyntaxNode::new_root(builder.finish())
+                .clone_for_update()
+                .into()],
+        );
+    }
+}
+
 impl ChangeLog {
     pub fn new() -> ChangeLog {
         let mut builder = GreenNodeBuilder::new();
 
         builder.start_node(ROOT.into());
         builder.finish_node();
-        ChangeLog(SyntaxNode::new_root(builder.finish()))
+
+        let syntax = SyntaxNode::new_root(builder.finish());
+        ChangeLog(syntax.clone_for_update())
     }
 
     /// Returns an iterator over all entries in the watch file.
     pub fn entries(&self) -> impl Iterator<Item = Entry> + '_ {
         self.0.children().filter_map(Entry::cast)
+    }
+
+    pub fn new_entry(&mut self) -> EntryBuilder {
+        EntryBuilder {
+            root: self.0.clone(),
+            package: None,
+            version: None,
+            distributions: None,
+            urgency: None,
+            maintainer: None,
+            timestamp: None,
+            change_lines: vec![],
+        }
     }
 
     pub fn pop_first(&mut self) -> Option<Entry> {
@@ -907,11 +1124,34 @@ fn test_from_io_read() {
 
   * New upstream release.
 
- -- Jelmer Vernooĳ <jelmer@debian.org> Mon, 04 Sep 2023 18:13:45 -0500
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
 "#;
 
     let input = changelog.as_bytes();
     let input = Box::new(std::io::Cursor::new(input)) as Box<dyn std::io::Read>;
     let parsed = ChangeLog::read(input).unwrap();
     assert_eq!(parsed.to_string(), changelog);
+}
+
+#[test]
+fn test_new_entry() {
+    let mut cl = ChangeLog::new();
+    cl.new_entry()
+        .package("breezy".into())
+        .version("3.3.4-1".parse().unwrap())
+        .distributions(vec!["unstable".into()])
+        .urgency(Urgency::Low)
+        .maintainer("Jelmer Vernooĳ".into(), "jelmer@debian.org".into())
+        .change_line("* A change.".into())
+        .datetime("2023-09-04T18:13:45-05:00".parse().unwrap())
+        .finish();
+    assert_eq!(
+        r###"breezy (3.3.4-1) unstable;urgency=low
+
+  * A change.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"###,
+        cl.to_string()
+    );
 }
