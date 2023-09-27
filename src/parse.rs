@@ -3,6 +3,7 @@ use crate::SyntaxKind;
 use crate::SyntaxKind::*;
 use chrono::{DateTime, FixedOffset};
 use debversion::Version;
+use lazy_regex::regex_captures;
 use rowan::ast::AstNode;
 use std::str::FromStr;
 
@@ -510,8 +511,8 @@ impl EntryBuilder {
         self
     }
 
-    pub fn maintainer(mut self, maintainer: String, email: String) -> Self {
-        self.maintainer = Some((maintainer, email));
+    pub fn maintainer(mut self, maintainer: (String, String)) -> Self {
+        self.maintainer = Some(maintainer);
         self
     }
 
@@ -715,6 +716,21 @@ impl ChangeLog {
             maintainer: crate::get_maintainer(),
             timestamp: Some(chrono::Utc::now().into()),
             change_lines: vec![],
+        }
+    }
+
+    pub fn auto_add_change(&mut self, change: String, maintainer: Option<(String, String)>) {
+        match self.entries().next() {
+            Some(mut entry) if entry.is_unreleased() == Some(true) => {
+                entry.change_for_author(change, maintainer.map(|(n, e)| n));
+            }
+            _ => {
+                let mut builder = self.new_entry();
+                if let Some(maintainer) = maintainer {
+                    builder = builder.maintainer(maintainer);
+                }
+                builder.change_line(change).finish();
+            }
         }
     }
 
@@ -967,6 +983,7 @@ impl Entry {
         })
     }
 
+    /// Return whether the entry is marked as being unreleased
     pub fn is_unreleased(&self) -> Option<bool> {
         self.distributions().as_ref().map(|ds| {
             let ds = ds.iter().map(|d| d.as_str()).collect::<Vec<&str>>();
@@ -1181,7 +1198,7 @@ fn test_new_entry() {
         .version("3.3.4-1".parse().unwrap())
         .distributions(vec!["unstable".into()])
         .urgency(Urgency::Low)
-        .maintainer("Jelmer Vernooĳ".into(), "jelmer@debian.org".into())
+        .maintainer(("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()))
         .change_line("* A change.".into())
         .datetime("2023-09-04T18:13:45-05:00".parse().unwrap())
         .finish();
@@ -1204,7 +1221,7 @@ fn test_new_empty_default() {
     cl.new_entry()
         .package("breezy".into())
         .version("3.3.4-1".parse().unwrap())
-        .maintainer("Jelmer Vernooĳ".into(), "jelmer@debian.org".into())
+        .maintainer(("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()))
         .change_line("* A change.".into())
         .datetime("2023-09-04T18:13:45-05:00".parse().unwrap())
         .finish();

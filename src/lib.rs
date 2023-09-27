@@ -24,6 +24,7 @@
 mod lex;
 mod parse;
 use lazy_regex::regex_captures;
+pub mod changes;
 
 pub use crate::parse::{Error, ParseError};
 
