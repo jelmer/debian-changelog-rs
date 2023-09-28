@@ -719,21 +719,6 @@ impl ChangeLog {
         }
     }
 
-    pub fn auto_add_change(&mut self, change: String, maintainer: Option<(String, String)>) {
-        match self.entries().next() {
-            Some(mut entry) if entry.is_unreleased() == Some(true) => {
-                entry.change_for_author(change, maintainer.map(|(n, e)| n));
-            }
-            _ => {
-                let mut builder = self.new_entry();
-                if let Some(maintainer) = maintainer {
-                    builder = builder.maintainer(maintainer);
-                }
-                builder.change_line(change).finish();
-            }
-        }
-    }
-
     pub fn pop_first(&mut self) -> Option<Entry> {
         let mut it = self.entries();
         if let Some(entry) = it.next() {
@@ -985,10 +970,19 @@ impl Entry {
 
     /// Return whether the entry is marked as being unreleased
     pub fn is_unreleased(&self) -> Option<bool> {
-        self.distributions().as_ref().map(|ds| {
-            let ds = ds.iter().map(|d| d.as_str()).collect::<Vec<&str>>();
-            crate::distributions_is_unreleased(ds.as_slice())
-        })
+        self.distributions()
+            .as_ref()
+            .map(|ds| {
+                let ds = ds.iter().map(|d| d.as_str()).collect::<Vec<&str>>();
+                crate::distributions_is_unreleased(ds.as_slice())
+            })
+            .or_else(|| {
+                if self.maintainer().is_none() && self.email().is_none() {
+                    Some(true)
+                } else {
+                    None
+                }
+            })
     }
 }
 
@@ -1251,5 +1245,5 @@ fn test_new_empty_entry() {
 "###,
         cl.to_string()
     );
-    assert_eq!(cl.entries().next().unwrap().is_unreleased(), None);
+    assert_eq!(cl.entries().next().unwrap().is_unreleased(), Some(true));
 }
