@@ -3,7 +3,6 @@ use crate::SyntaxKind;
 use crate::SyntaxKind::*;
 use chrono::{DateTime, FixedOffset};
 use debversion::Version;
-use lazy_regex::regex_captures;
 use rowan::ast::AstNode;
 use std::str::FromStr;
 
@@ -484,21 +483,25 @@ pub struct EntryBuilder {
 }
 
 impl EntryBuilder {
+    #[must_use]
     pub fn package(mut self, package: String) -> Self {
         self.package = Some(package);
         self
     }
 
+    #[must_use]
     pub fn version(mut self, version: Version) -> Self {
         self.version = Some(version);
         self
     }
 
+    #[must_use]
     pub fn distributions(mut self, distributions: Vec<String>) -> Self {
         self.distributions = Some(distributions);
         self
     }
 
+    #[must_use]
     pub fn distribution(mut self, distribution: String) -> Self {
         self.distributions
             .get_or_insert_with(Vec::new)
@@ -506,21 +509,25 @@ impl EntryBuilder {
         self
     }
 
+    #[must_use]
     pub fn urgency(mut self, urgency: Urgency) -> Self {
         self.urgency = Some(urgency);
         self
     }
 
+    #[must_use]
     pub fn maintainer(mut self, maintainer: (String, String)) -> Self {
         self.maintainer = Some(maintainer);
         self
     }
 
+    #[must_use]
     pub fn datetime(mut self, timestamp: chrono::DateTime<FixedOffset>) -> Self {
         self.timestamp = Some(timestamp);
         self
     }
 
+    #[must_use]
     pub fn change_line(mut self, line: String) -> Self {
         self.change_lines.push(line);
         self
@@ -925,10 +932,6 @@ impl Entry {
         self.header().and_then(|h| h.distributions())
     }
 
-    fn changes(&self) -> impl Iterator<Item = EntryBody> + '_ {
-        self.0.children().filter_map(EntryBody::cast)
-    }
-
     /// Returns the email address of the maintainer.
     pub fn email(&self) -> Option<String> {
         self.footer().and_then(|f| f.email())
@@ -956,16 +959,29 @@ impl Entry {
 
     /// Returns the changes of the entry.
     pub fn change_lines(&self) -> impl Iterator<Item = String> + '_ {
-        // TODO: empty head and tail empty lines
-        self.0.children().filter_map(|n| {
-            if let Some(ref change) = EntryBody::cast(n.clone()) {
-                Some(change.text())
-            } else if n.kind() == EMPTY_LINE {
-                Some("".to_string())
+        let mut lines = self
+            .0
+            .children()
+            .filter_map(|n| {
+                if let Some(ref change) = EntryBody::cast(n.clone()) {
+                    Some(change.text())
+                } else if n.kind() == EMPTY_LINE {
+                    Some("".to_string())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        while let Some(last) = lines.last() {
+            if last.is_empty() {
+                lines.pop();
             } else {
-                None
+                break;
             }
-        })
+        }
+
+        lines.into_iter().skip_while(|it| it.is_empty())
     }
 
     /// Return whether the entry is marked as being unreleased
@@ -1142,14 +1158,7 @@ breezy (3.3.3-2) unstable; urgency=medium
         Some("2023-09-04T18:13:45-05:00".parse().unwrap())
     );
     let changes_lines: Vec<_> = entry.change_lines().collect();
-    assert_eq!(
-        changes_lines,
-        vec![
-            "".to_string(),
-            "* New upstream release.".to_string(),
-            "".to_string()
-        ]
-    );
+    assert_eq!(changes_lines, vec!["* New upstream release.".to_string()]);
 
     assert_eq!(node.text(), CHANGELOG);
 

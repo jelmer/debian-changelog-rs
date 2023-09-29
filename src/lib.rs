@@ -253,3 +253,67 @@ fn test_distributions_is_unreleased() {
     assert!(distributions_is_unreleased(&["UNRELEASED", "UNRELEASED-2"]));
     assert!(!distributions_is_unreleased(&["stable"]));
 }
+
+/// Check whether this is a traditional inaugural release
+pub fn is_unreleased_inaugural(cl: &ChangeLog) -> bool {
+    let mut entries = cl.entries();
+    match entries.next() {
+        None => return false,
+        Some(entry) => {
+            if entry.is_unreleased() == Some(false) {
+                return false;
+            }
+            let changes = entry.change_lines().collect::<Vec<_>>();
+            if changes.len() > 1 || !changes[0].starts_with("* Initial release") {
+                return false;
+            }
+        }
+    }
+    entries.next().is_none()
+}
+
+#[cfg(test)]
+mod is_unreleased_inaugural_tests {
+    use super::*;
+
+    #[test]
+    fn test_empty() {
+        assert!(!is_unreleased_inaugural(&ChangeLog::new()));
+    }
+
+    #[test]
+    fn test_unreleased_inaugural() {
+        let mut cl = ChangeLog::new();
+        cl.new_entry()
+            .maintainer(("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()))
+            .distribution("UNRELEASED".to_string())
+            .version("1.0.0".parse().unwrap())
+            .change_line("* Initial release".to_string())
+            .finish();
+        assert!(is_unreleased_inaugural(&cl));
+    }
+
+    #[test]
+    fn test_not_unreleased_inaugural() {
+        let mut cl = ChangeLog::new();
+        cl.new_entry()
+            .maintainer(("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()))
+            .distributions(vec!["unstable".to_string()])
+            .version("1.0.0".parse().unwrap())
+            .change_line("* Initial release".to_string())
+            .finish();
+        assert_eq!(cl.entries().next().unwrap().is_unreleased(), Some(false));
+
+        // Not unreleased
+        assert!(!is_unreleased_inaugural(&cl));
+
+        cl.new_entry()
+            .maintainer(("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()))
+            .distribution("UNRELEASED".to_string())
+            .version("1.0.1".parse().unwrap())
+            .change_line("* Some change".to_string())
+            .finish();
+        // Not inaugural
+        assert!(!is_unreleased_inaugural(&cl));
+    }
+}
