@@ -1,7 +1,7 @@
 //! Functions to parse the changes from a changelog entry.
 
-use lazy_regex::{regex_captures, regex_replace};
-use std::borrow::Cow;
+use lazy_regex::{regex_captures};
+
 
 // A specific section in a changelog entry, e.g.:
 //
@@ -276,5 +276,93 @@ mod strip_for_commit_message_tests {
             super::strip_for_commit_message(vec!["* foo", "bar", "* baz"]),
             vec!["* foo", "bar", "* baz"]
         );
+    }
+}
+
+/// Format a section title.
+pub fn format_section_title(title: &str) -> String {
+    format!("[ {} ]", title)
+}
+
+#[cfg(test)]
+mod format_section_title_tests {
+    #[test]
+    fn test() {
+        assert_eq!(super::format_section_title("foo"), "[ foo ]");
+    }
+}
+
+/// Add a change to the list of changes, attributed to a specific author.
+///
+/// This will add a new section for the author if there are no sections yet.
+///
+/// # Example
+///
+/// ```
+/// let mut changes = vec![];
+/// debian_changelog::changes::add_change_for_author(&mut changes, "Author 1", vec!["* Change 1"], None);
+/// assert_eq!(changes, vec!["* Change 1"]);
+/// ```
+pub fn add_change_for_author(
+    changes: &mut Vec<String>,
+    author_name: &str,
+    change: Vec<&str>,
+    default_author: Option<(String, String)>,
+) {
+    let by_author = changes_by_author(changes.iter().map(|s| s.as_str())).collect::<Vec<_>>();
+
+    // There are no per author sections yet, so attribute current changes to changelog entry author
+    if by_author.iter().all(|(a, _, _)| a.is_none()) {
+        if let Some((default_name, _default_email)) = default_author {
+            if author_name != default_name.as_str() {
+                if !changes.is_empty() {
+                    changes.insert(0, format_section_title(default_name.as_str()));
+                    if !changes.last().unwrap().is_empty() {
+                        changes.push("".to_string());
+                    }
+                }
+                changes.push(format_section_title(author_name));
+            }
+        }
+    } else if let Some(last_section) = by_author.last().as_ref() {
+        // There is a last section, so add a new section only if it is not for the same author
+        if last_section.0 != Some(author_name) {
+            changes.push("".to_string());
+            changes.push(format_section_title(author_name));
+        }
+    }
+
+    changes.extend(crate::textwrap::rewrap_changes(change.into_iter()).map(|s| s.to_string()));
+}
+
+#[cfg(test)]
+mod add_change_for_author_tests {
+    use super::*;
+
+    #[test]
+    fn test_matches_default() {
+        let mut changes = vec![];
+        add_change_for_author(
+            &mut changes,
+            "Author 1",
+            vec!["* Change 1"],
+            Some(("Author 1".to_string(), "jelmer@debian.org".to_string())),
+        );
+        assert_eq!(changes, vec!["* Change 1"]);
+    }
+
+    #[test]
+    fn test_not_matches_default() {
+        let mut changes = vec![];
+        add_change_for_author(
+            &mut changes,
+            "Author 1",
+            vec!["* Change 1"],
+            Some((
+                "Default Author".to_string(),
+                "jelmer@debian.org".to_string(),
+            )),
+        );
+        assert_eq!(changes, vec!["[ Author 1 ]", "* Change 1"]);
     }
 }
