@@ -7,18 +7,18 @@
 //!
 //! ```rust
 //! use std::io::Read;
-//! let file = std::fs::File::open("/usr/share/doc/rustc/changelog.Debian.gz").unwrap();
-//! let mut gz = flate2::read::GzDecoder::new(file);
-//! let mut contents = String::new();
-//! gz.read_to_string(&mut contents).unwrap();
+//! let contents = r#"rustc (1.70.0+dfsg1-1) unstable; urgency=medium
+//!
+//!   * Upload to unstable
+//!
+//!  -- Fabian Grünbichler <debian@fabian.gruenbichler.email>  Wed, 20 Sep 2023 20:18:40 +0200
+//! "#;
 //! let changelog: debian_changelog::ChangeLog = contents.parse().unwrap();
-//! for entry in changelog.entries() {
-//!     println!(
-//!         "{}: {}",
-//!         entry.package().unwrap(),
-//!         entry.version().unwrap().to_string()
-//!     );
-//! }
+//! assert_eq!(
+//!     vec![("rustc".to_string(), "1.70.0+dfsg1-1".parse().unwrap())],
+//!     changelog.entries().map(
+//!         |e| (e.package().unwrap(), e.version().unwrap()))
+//!     .collect::<Vec<_>>());
 //! ```
 
 mod lex;
