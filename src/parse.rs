@@ -483,21 +483,25 @@ pub struct EntryBuilder {
 }
 
 impl EntryBuilder {
+    #[must_use]
     pub fn package(mut self, package: String) -> Self {
         self.package = Some(package);
         self
     }
 
+    #[must_use]
     pub fn version(mut self, version: Version) -> Self {
         self.version = Some(version);
         self
     }
 
+    #[must_use]
     pub fn distributions(mut self, distributions: Vec<String>) -> Self {
         self.distributions = Some(distributions);
         self
     }
 
+    #[must_use]
     pub fn distribution(mut self, distribution: String) -> Self {
         self.distributions
             .get_or_insert_with(Vec::new)
@@ -505,21 +509,25 @@ impl EntryBuilder {
         self
     }
 
+    #[must_use]
     pub fn urgency(mut self, urgency: Urgency) -> Self {
         self.urgency = Some(urgency);
         self
     }
 
-    pub fn maintainer(mut self, maintainer: String, email: String) -> Self {
-        self.maintainer = Some((maintainer, email));
+    #[must_use]
+    pub fn maintainer(mut self, maintainer: (String, String)) -> Self {
+        self.maintainer = Some(maintainer);
         self
     }
 
+    #[must_use]
     pub fn datetime(mut self, timestamp: chrono::DateTime<FixedOffset>) -> Self {
         self.timestamp = Some(timestamp);
         self
     }
 
+    #[must_use]
     pub fn change_line(mut self, line: String) -> Self {
         self.change_lines.push(line);
         self
@@ -909,53 +917,88 @@ impl Entry {
         self.0.children().find_map(EntryFooter::cast)
     }
 
+    /// Return the package name of the entry.
     pub fn package(&self) -> Option<String> {
         self.header().and_then(|h| h.package())
     }
 
+    /// Return the version of the entry.
     pub fn version(&self) -> Option<Version> {
         self.header().and_then(|h| h.version())
     }
 
+    /// Return the distributions of the entry.
     pub fn distributions(&self) -> Option<Vec<String>> {
         self.header().and_then(|h| h.distributions())
     }
 
-    pub fn changes(&self) -> impl Iterator<Item = EntryBody> + '_ {
-        self.0.children().filter_map(EntryBody::cast)
-    }
-
+    /// Returns the email address of the maintainer.
     pub fn email(&self) -> Option<String> {
         self.footer().and_then(|f| f.email())
     }
 
+    /// Returns the name of the maintainer.
     pub fn maintainer(&self) -> Option<String> {
         self.footer().and_then(|f| f.maintainer())
     }
 
+    /// Returns the timestamp of the entry, as the raw string.
     pub fn timestamp(&self) -> Option<String> {
         self.footer().and_then(|f| f.timestamp())
     }
 
+    /// Returns the datetime of the entry.
     pub fn datetime(&self) -> Option<DateTime<FixedOffset>> {
         self.timestamp().and_then(|ts| parse_time_string(&ts).ok())
     }
 
+    /// Returns the urgency of the entry.
     pub fn urgency(&self) -> Option<Urgency> {
         self.header().and_then(|h| h.urgency())
     }
 
+    /// Returns the changes of the entry.
     pub fn change_lines(&self) -> impl Iterator<Item = String> + '_ {
-        // TODO: empty head and tail empty lines
-        self.0.children().filter_map(|n| {
-            if let Some(ref change) = EntryBody::cast(n.clone()) {
-                Some(change.text())
-            } else if n.kind() == EMPTY_LINE {
-                Some("".to_string())
+        let mut lines = self
+            .0
+            .children()
+            .filter_map(|n| {
+                if let Some(ref change) = EntryBody::cast(n.clone()) {
+                    Some(change.text())
+                } else if n.kind() == EMPTY_LINE {
+                    Some("".to_string())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        while let Some(last) = lines.last() {
+            if last.is_empty() {
+                lines.pop();
             } else {
-                None
+                break;
             }
-        })
+        }
+
+        lines.into_iter().skip_while(|it| it.is_empty())
+    }
+
+    /// Return whether the entry is marked as being unreleased
+    pub fn is_unreleased(&self) -> Option<bool> {
+        self.distributions()
+            .as_ref()
+            .map(|ds| {
+                let ds = ds.iter().map(|d| d.as_str()).collect::<Vec<&str>>();
+                crate::distributions_is_unreleased(ds.as_slice())
+            })
+            .or_else(|| {
+                if self.maintainer().is_none() && self.email().is_none() {
+                    Some(true)
+                } else {
+                    None
+                }
+            })
     }
 }
 
@@ -1115,14 +1158,7 @@ breezy (3.3.3-2) unstable; urgency=medium
         Some("2023-09-04T18:13:45-05:00".parse().unwrap())
     );
     let changes_lines: Vec<_> = entry.change_lines().collect();
-    assert_eq!(
-        changes_lines,
-        vec![
-            "".to_string(),
-            "* New upstream release.".to_string(),
-            "".to_string()
-        ]
-    );
+    assert_eq!(changes_lines, vec!["* New upstream release.".to_string()]);
 
     assert_eq!(node.text(), CHANGELOG);
 
@@ -1165,7 +1201,7 @@ fn test_new_entry() {
         .version("3.3.4-1".parse().unwrap())
         .distributions(vec!["unstable".into()])
         .urgency(Urgency::Low)
-        .maintainer("Jelmer Vernooĳ".into(), "jelmer@debian.org".into())
+        .maintainer(("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()))
         .change_line("* A change.".into())
         .datetime("2023-09-04T18:13:45-05:00".parse().unwrap())
         .finish();
@@ -1178,6 +1214,8 @@ fn test_new_entry() {
 "###,
         cl.to_string()
     );
+
+    assert!(!cl.entries().next().unwrap().is_unreleased().unwrap());
 }
 
 #[test]
@@ -1186,7 +1224,7 @@ fn test_new_empty_default() {
     cl.new_entry()
         .package("breezy".into())
         .version("3.3.4-1".parse().unwrap())
-        .maintainer("Jelmer Vernooĳ".into(), "jelmer@debian.org".into())
+        .maintainer(("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()))
         .change_line("* A change.".into())
         .datetime("2023-09-04T18:13:45-05:00".parse().unwrap())
         .finish();
@@ -1216,4 +1254,5 @@ fn test_new_empty_entry() {
 "###,
         cl.to_string()
     );
+    assert_eq!(cl.entries().next().unwrap().is_unreleased(), Some(true));
 }
