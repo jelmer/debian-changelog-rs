@@ -1,6 +1,7 @@
 //! Functions to parse the changes from a changelog entry.
 
-use lazy_regex::{regex_captures};
+use lazy_regex::{regex_captures, regex_replace};
+use std::borrow::Cow;
 
 // A specific section in a changelog entry, e.g.:
 //
@@ -155,6 +156,125 @@ mod changes_sections_tests {
                 .into_iter()
             )
             .collect::<Vec<_>>()
+        );
+    }
+}
+
+/// Strip a changelog message like debcommit does.
+///
+/// Takes a list of changes from a changelog entry and applies a transformation
+/// so the message is well formatted for a commit message.
+///
+/// # Arguments:
+/// * `changes` - a list of lines from the changelog entry
+///
+/// # Returns
+/// Another list of lines with blank lines stripped from the start and the
+/// spaces the start of the lines split if there is only one logical entry.
+pub fn strip_for_commit_message(mut changes: Vec<&str>) -> Vec<&str> {
+    if changes.is_empty() {
+        return vec![];
+    }
+    while let Some(last) = changes.last() {
+        if last.trim().is_empty() {
+            changes.pop();
+        } else {
+            break;
+        }
+    }
+
+    while let Some(first) = changes.first() {
+        if first.trim().is_empty() {
+            changes.remove(0);
+        } else {
+            break;
+        }
+    }
+
+    let changes = changes
+        .into_iter()
+        .map(|mut line| loop {
+            if line.starts_with("  ") {
+                line = &line[2..];
+            } else if line.starts_with('\t') {
+                line = &line[1..];
+            } else {
+                break line;
+            }
+        })
+        .collect::<Vec<_>>();
+
+    // Drop bullet points
+    let bullet_points_dropped = changes
+        .iter()
+        .map(|line| {
+            let line = line.trim_start();
+            if line.starts_with("* ") || line.starts_with("+ ") || line.starts_with("- ") {
+                line[1..].trim_start()
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>();
+    if bullet_points_dropped.len() == 1 {
+        bullet_points_dropped
+    } else {
+        changes
+    }
+}
+
+#[cfg(test)]
+mod strip_for_commit_message_tests {
+    #[test]
+    fn test_no_changes() {
+        assert_eq!(super::strip_for_commit_message(vec![]), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn test_empty_changes() {
+        assert_eq!(
+            super::strip_for_commit_message(vec![""]),
+            Vec::<&str>::new()
+        );
+    }
+
+    #[test]
+    fn test_removes_leading_whitespace() {
+        assert_eq!(
+            super::strip_for_commit_message(vec!["foo", "bar", "\tbaz", " bang"]),
+            vec!["foo", "bar", "baz", " bang"]
+        );
+    }
+
+    #[test]
+    fn test_removes_star_if_one() {
+        assert_eq!(super::strip_for_commit_message(vec!["* foo"]), vec!["foo"]);
+        assert_eq!(
+            super::strip_for_commit_message(vec!["\t* foo"]),
+            vec!["foo"]
+        );
+        assert_eq!(super::strip_for_commit_message(vec!["+ foo"]), vec!["foo"]);
+        assert_eq!(super::strip_for_commit_message(vec!["- foo"]), vec!["foo"]);
+        assert_eq!(super::strip_for_commit_message(vec!["*  foo"]), vec!["foo"]);
+        assert_eq!(
+            super::strip_for_commit_message(vec!["*  foo", "   bar"]),
+            vec!["*  foo", " bar"]
+        );
+    }
+
+    #[test]
+    fn test_leaves_start_if_multiple() {
+        assert_eq!(
+            super::strip_for_commit_message(vec!["* foo", "* bar"]),
+            vec!["* foo", "* bar"]
+        );
+        assert_eq!(
+            super::strip_for_commit_message(vec!["* foo", "+ bar"]),
+            vec!["* foo", "+ bar"]
+        );
+        assert_eq!(
+            super::strip_for_commit_message(vec!["* foo", "bar", "* baz"]),
+            vec!["* foo", "bar", "* baz"]
         );
     }
 }
