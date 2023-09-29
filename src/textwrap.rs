@@ -115,13 +115,11 @@ mod find_words_tests {
     }
 }
 
-/// Wrap a string of text, without breaking in between "Closes: #XXXXXX" fragments
-pub fn textwrap<'a>(
-    text: &'a str,
+fn options<'a>(
     width: Option<usize>,
-    initial_indent: Option<&str>,
-    subsequent_indent: Option<&str>,
-) -> Vec<Cow<'a, str>> {
+    initial_indent: Option<&'a str>,
+    subsequent_indent: Option<&'a str>,
+) -> textwrap::Options<'a> {
     let width = width.unwrap_or(DEFAULT_WIDTH);
     let mut options = textwrap::Options::new(width)
         .break_words(false)
@@ -133,6 +131,17 @@ pub fn textwrap<'a>(
     if let Some(subsequent_indent) = subsequent_indent {
         options = options.subsequent_indent(subsequent_indent);
     }
+    options
+}
+
+/// Wrap a string of text, without breaking in between "Closes: #XXXXXX" fragments
+pub fn textwrap<'a>(
+    text: &'a str,
+    width: Option<usize>,
+    initial_indent: Option<&str>,
+    subsequent_indent: Option<&str>,
+) -> Vec<Cow<'a, str>> {
+    let options = options(width, initial_indent, subsequent_indent);
     // Actual text wrapping using textwrap crate
     textwrap::wrap(text, options)
 }
@@ -173,5 +182,278 @@ mod textwrap_tests {
             vec!["This is a line that has been", "broken"],
             super::textwrap("This is a line that has been broken", Some(30), None, None)
         );
+    }
+}
+
+// Checks if two lines can join
+fn can_join(line1: &str, line2: &str) -> bool {
+    if line1.ends_with(':') {
+        return false;
+    }
+    if let Some(first_char) = line2.chars().next() {
+        if first_char.is_uppercase() {
+            if line1.ends_with(']') || line1.ends_with('}') {
+                return false;
+            }
+            if !line1.ends_with('.') {
+                return false;
+            }
+        }
+    }
+    if line2.trim_start().starts_with('*')
+        || line2.trim_start().starts_with('-')
+        || line2.trim_start().starts_with('+')
+    {
+        return false;
+    }
+
+    // don't let lines with different indentation join
+    let line1_indent = line1.len() - line1.trim_start_matches(' ').len();
+    let line2_indent = line2.len() - line2.trim_start_matches(' ').len();
+    if line1_indent != line2_indent {
+        return false;
+    }
+    true
+}
+
+#[cfg(test)]
+mod can_join_tests {
+    #[test]
+    fn test_can_join() {
+        assert!(super::can_join("This is a line.", "This is a line."));
+        assert!(super::can_join(
+            "This is a line.",
+            "This is a line. And this is another."
+        ));
+        assert!(!super::can_join(
+            "This is a line.",
+            "+ This is a submititem."
+        ));
+        assert!(!super::can_join(
+            "This is a line introducing:",
+            "  * A list item."
+        ));
+        assert!(!super::can_join(
+            " Lines with different indentation",
+            "  can not join."
+        ));
+    }
+}
+
+// Check if any lines are longer than the specified width
+fn any_long_lines(lines: &[&str], width: usize) -> bool {
+    lines.iter().any(|line| line.len() > width)
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Error {
+    MissingBulletPoint {
+        line: String,
+    },
+    UnexpectedIndent {
+        lineno: usize,
+        line: String,
+        indent: usize,
+    },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Error::MissingBulletPoint { line } => {
+                write!(f, "Missing bullet point in line: {}", line)
+            }
+            Error::UnexpectedIndent {
+                lineno,
+                line,
+                indent,
+            } => write!(
+                f,
+                "Unexpected indent in line {}: {} (expected {} spaces)",
+                lineno, line, indent
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+// Rewrap lines from a list of changes
+//
+// E.g.:
+//
+// * This is a long line that needs to be wrapped
+//
+// =>
+//
+// * This is a short line that
+//   needs to be wrappd
+//
+fn rewrap_change<'a>(change: &[&'a str], width: Option<usize>) -> Result<Vec<Cow<'a, str>>, Error> {
+    let width = width.unwrap_or(DEFAULT_WIDTH);
+    assert!(width > 4);
+
+    if change.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut initial_indent = match regex_captures!(r"^[  ]*[\+\-\*] ", change[0]) {
+        Some(initial_indent) => initial_indent.to_string(),
+        None => {
+            return Err(Error::MissingBulletPoint {
+                line: change[0].to_string(),
+            })
+        }
+    };
+    let prefix_len = initial_indent.len();
+
+    if !any_long_lines(change, width) {
+        return Ok(change.iter().map(|line| (*line).into()).collect());
+    }
+    let mut subsequent_indent = " ".repeat(prefix_len);
+
+    let mut lines = vec![&change[0][prefix_len..]];
+
+    // Strip the leading indentation
+    for (lineno, line) in change[1..].iter().enumerate() {
+        if line.len() < prefix_len {
+            lines.push(&line[0..0]);
+        } else if line.strip_prefix(subsequent_indent.as_str()).is_some() {
+            lines.push(&line[initial_indent.len()..]);
+        } else {
+            return Err(Error::UnexpectedIndent {
+                lineno,
+                indent: subsequent_indent.len(),
+                line: line.to_string(),
+            });
+        }
+    }
+
+    let mut ret: Vec<Cow<'a, str>> = Vec::new();
+    let mut todo = vec![lines.remove(0)];
+
+    for line in lines.into_iter() {
+        if can_join(todo.last().unwrap(), line) {
+            todo.push(line);
+        } else {
+            ret.extend(
+                textwrap(
+                    todo.join(" ").as_str(),
+                    Some(width),
+                    Some(initial_indent.as_str()),
+                    Some(subsequent_indent.as_str()),
+                )
+                .iter()
+                .map(|s| Cow::Owned(s.to_string())),
+            );
+            initial_indent =
+                " ".repeat(prefix_len + line.len() - line.trim_start_matches(' ').len());
+            subsequent_indent = " ".repeat(initial_indent.len());
+            todo = vec![line.trim_start_matches(' ')];
+        }
+    }
+    ret.extend(
+        textwrap(
+            todo.join(" ").as_str(),
+            Some(width),
+            Some(initial_indent.as_str()),
+            Some(subsequent_indent.as_str()),
+        )
+        .iter()
+        .map(|s| Cow::Owned(s.to_string())),
+    );
+    Ok(ret)
+}
+
+// Rewrap lines from an iterator of changes
+pub fn rewrap_changes<'a>(
+    changes: impl Iterator<Item = &'a str>,
+) -> impl Iterator<Item = Cow<'a, str>> {
+    let mut change = Vec::new();
+    let mut indent_len: Option<usize> = None;
+    let mut ret = vec![];
+    for line in changes {
+        // Start of a new change
+        if let Some(indent) = regex_captures!(r"^[  ]*[\+\-\*] ", line) {
+            ret.extend(rewrap_change(change.as_slice(), None).unwrap());
+            indent_len = Some(indent.len());
+            change = vec![line];
+        } else if let Some(current_indent) = indent_len {
+            if line.starts_with(&" ".repeat(current_indent)) {
+                change.push(line[current_indent..].into());
+            } else {
+                ret.extend(rewrap_change(change.as_slice(), None).unwrap());
+                change = vec![line];
+            }
+        } else {
+            ret.extend(rewrap_change(change.as_slice(), None).unwrap());
+            ret.push(line.into());
+        }
+    }
+    if !change.is_empty() {
+        ret.extend(rewrap_change(change.as_slice(), None).unwrap());
+    }
+    ret.into_iter()
+}
+
+#[cfg(test)]
+mod rewrap_tests {
+    use super::rewrap_change;
+    const LONG_LINE: &str = "This is a very long line that could have been broken and should have been broken but was not broken.";
+
+    #[test]
+    fn test_too_short() {
+        assert_eq!(Vec::<&str>::new(), rewrap_change(&[][..], None).unwrap());
+        assert_eq!(
+            vec!["* Foo bar"],
+            rewrap_change(&["* Foo bar"][..], None).unwrap()
+        );
+        assert_eq!(
+            vec!["* Foo", "  bar"],
+            rewrap_change(&["* Foo", "  bar"][..], None).unwrap()
+        );
+        assert_eq!(
+            vec!["  * Beginning", "  next line"],
+            rewrap_change(&["  * Beginning", "  next line"][..], None).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_no_initial() {
+        let long = "x".repeat(100);
+        assert_eq!(
+            super::Error::MissingBulletPoint { line: long.clone() },
+            rewrap_change(&[long.as_str()], None).unwrap_err()
+        );
+    }
+
+    #[test]
+    fn test_wrap() {
+        assert_eq!(
+            vec![
+                super::Cow::Borrowed(
+                    "* This is a very long line that could have been broken and should have been"
+                ),
+                "  broken but was not broken.".into()
+            ],
+            rewrap_change(&[format!("* {}", LONG_LINE).as_str()][..], None).unwrap()
+        );
+        assert_eq!(r###" * Build-Depend on libsdl1.2-dev, libsdl-ttf2.0-dev and libsdl-mixer1.2-dev
+   instead of with the embedded version, add -lSDL_ttf to --with-py-libs in
+   debian/rules and rebootstrap (Closes: #382202)"###.split('\n').collect::<Vec<_>>(), rewrap_change(r###" * Build-Depend on libsdl1.2-dev, libsdl-ttf2.0-dev and libsdl-mixer1.2-dev instead
+   of with the embedded version, add -lSDL_ttf to --with-py-libs in debian/rules
+   and rebootstrap (Closes: #382202)
+"###.split('\n').collect::<Vec<_>>().as_slice(), None).unwrap());
+    }
+
+    #[test]
+    fn test_no_join() {
+        assert_eq!(r###" - Translators know why this sign has been put here:
+        _Choices: ${FOO}, !Other[ You only have to translate Other, remove the
+        exclamation mark and this comment between brackets]
+      Currently text, newt, slang and gtk frontends support this feature."###.split('\n').collect::<Vec<_>>(), rewrap_change(r###" - Translators know why this sign has been put here:
+        _Choices: ${FOO}, !Other[ You only have to translate Other, remove the exclamation mark and this comment between brackets]
+      Currently text, newt, slang and gtk frontends support this feature.
+"###.split('\n').collect::<Vec<_>>().as_slice(), None).unwrap());
     }
 }
