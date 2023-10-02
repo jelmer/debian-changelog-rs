@@ -1,7 +1,6 @@
 //! Functions to parse the changes from a changelog entry.
 
-use lazy_regex::{regex_captures};
-
+use lazy_regex::regex_captures;
 
 // A specific section in a changelog entry, e.g.:
 //
