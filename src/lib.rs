@@ -318,3 +318,58 @@ mod is_unreleased_inaugural_tests {
         assert!(!is_unreleased_inaugural(&cl));
     }
 }
+
+const DEFAULT_DISTRIBUTION: &[&str] = &["UNRELEASED"];
+
+/// Create a release for a changelog file.
+pub fn release(
+    cl: &mut ChangeLog,
+    distribution: Option<Vec<String>>,
+    timestamp: Option<chrono::DateTime<chrono::FixedOffset>>,
+    maintainer: Option<(String, String)>,
+) {
+    let mut entries = cl.entries();
+    let mut first_entry = entries.next().unwrap();
+    let second_entry = entries.next();
+    let distribution = if let Some(d) = distribution.as_ref() {
+        d.clone()
+    } else {
+        // Inherit from previous entry
+        if let Some(d) = second_entry.and_then(|e| e.distributions()) {
+            d
+        } else {
+            DEFAULT_DISTRIBUTION
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+        }
+    };
+    if first_entry.is_unreleased() == Some(false) {
+        take_uploadership(&mut first_entry, maintainer);
+        first_entry.set_distributions(distribution);
+        let timestamp = timestamp.unwrap_or(chrono::offset::Utc::now().into());
+        first_entry.set_datetime(timestamp);
+    }
+}
+
+/// Take uploadership of a changelog entry, but attribute contributors.
+///
+/// # Arguments
+/// * `entry` - Changelog entry to modify
+/// * `maintainer` - Tuple with (name, email) of maintainer to take ownership
+pub fn take_uploadership(entry: &mut Entry, maintainer: Option<(String, String)>) {
+    let (maintainer_name, maintainer_email) = if let Some(m) = maintainer {
+        m
+    } else {
+        get_maintainer().unwrap()
+    };
+    if let (Some(current_maintainer), Some(current_email)) = (entry.maintainer(), entry.email()) {
+        if (current_maintainer != maintainer_name || current_email != maintainer_email)
+            && entry.change_lines().count() >= 2
+            && !entry.change_lines().next().unwrap().starts_with("  [ ")
+        {
+            entry.prepend_change_line(format!("  [ {} ]", current_maintainer).as_str());
+        }
+    }
+    entry.set_maintainer((maintainer_name, maintainer_email));
+}

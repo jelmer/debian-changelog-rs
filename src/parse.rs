@@ -852,6 +852,22 @@ impl EntryHeader {
         })
     }
 
+    pub fn set_distributions(&mut self, distributions: Vec<String>) {
+        todo!("set_distributions")
+    }
+
+    pub fn set_version(&mut self, version: Version) {
+        todo!("set_version")
+    }
+
+    pub fn set_package(&mut self, package: String) {
+        todo!("set_package")
+    }
+
+    pub fn set_metadata(&mut self, key: &str, value: &str) {
+        todo!("set_metadata")
+    }
+
     fn metadata_node(&self) -> impl Iterator<Item = MetadataEntry> + '_ {
         let node = self.0.children().find(|it| it.kind() == METADATA);
 
@@ -902,11 +918,23 @@ impl EntryFooter {
             .map(|m| m.text())
     }
 
+    pub fn set_maintainer(&mut self, maintainer: (String, String)) {
+        todo!("set_maintainer")
+    }
+
+    pub fn set_email(&mut self, email: String) {
+        todo!("set_email")
+    }
+
     pub fn timestamp(&self) -> Option<String> {
         self.0
             .children()
             .find_map(Timestamp::cast)
             .map(|m| m.text())
+    }
+
+    pub fn set_timestamp(&mut self, timestamp: String) {
+        todo!("set_timestamp")
     }
 }
 
@@ -953,14 +981,32 @@ impl Entry {
         self.header().and_then(|h| h.package())
     }
 
+    pub fn set_package(&mut self, package: String) {
+        self.header()
+            .unwrap_or_else(|| self.create_header())
+            .set_package(package);
+    }
+
     /// Return the version of the entry.
     pub fn version(&self) -> Option<Version> {
         self.header().and_then(|h| h.version())
     }
 
+    pub fn set_version(&mut self, version: Version) {
+        self.header()
+            .unwrap_or_else(|| self.create_header())
+            .set_version(version);
+    }
+
     /// Return the distributions of the entry.
     pub fn distributions(&self) -> Option<Vec<String>> {
         self.header().and_then(|h| h.distributions())
+    }
+
+    pub fn set_distributions(&mut self, distributions: Vec<String>) {
+        self.header()
+            .unwrap_or_else(|| self.create_header())
+            .set_distributions(distributions);
     }
 
     /// Returns the email address of the maintainer.
@@ -973,9 +1019,25 @@ impl Entry {
         self.footer().and_then(|f| f.maintainer())
     }
 
+    pub fn set_maintainer(&mut self, maintainer: (String, String)) {
+        self.footer()
+            .unwrap_or_else(|| self.create_footer())
+            .set_maintainer(maintainer);
+    }
+
     /// Returns the timestamp of the entry, as the raw string.
     pub fn timestamp(&self) -> Option<String> {
         self.footer().and_then(|f| f.timestamp())
+    }
+
+    pub fn set_timestamp(&mut self, timestamp: String) {
+        self.footer()
+            .unwrap_or_else(|| self.create_footer())
+            .set_timestamp(timestamp);
+    }
+
+    pub fn set_datetime(&mut self, datetime: DateTime<FixedOffset>) {
+        self.set_timestamp(format!("{}", datetime.format("%a, %d %b %Y %H:%M:%S %z")));
     }
 
     /// Returns the datetime of the entry.
@@ -986,6 +1048,24 @@ impl Entry {
     /// Returns the urgency of the entry.
     pub fn urgency(&self) -> Option<Urgency> {
         self.header().and_then(|h| h.urgency())
+    }
+
+    fn create_header(&self) -> EntryHeader {
+        todo!("create_header")
+    }
+
+    fn create_footer(&self) -> EntryFooter {
+        todo!("create_footer")
+    }
+
+    pub fn set_urgency(&mut self, urgency: Urgency) {
+        self.set_metadata("urgency", urgency.to_string().as_str());
+    }
+
+    pub fn set_metadata(&mut self, key: &str, value: &str) {
+        self.header()
+            .unwrap_or_else(|| self.create_header())
+            .set_metadata(key, value)
     }
 
     /// Add a change for the specified author
