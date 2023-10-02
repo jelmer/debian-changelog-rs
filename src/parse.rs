@@ -564,7 +564,7 @@ impl EntryBuilder {
         ret.into_iter()
     }
 
-    pub fn finish(self) {
+    pub fn finish(self) -> Entry {
         let mut builder = GreenNodeBuilder::new();
         builder.start_node(ENTRY.into());
         builder.start_node(ENTRY_HEADER.into());
@@ -664,12 +664,9 @@ impl EntryBuilder {
         builder.finish_node(); // ENTRY_FOOTER
 
         builder.finish_node(); // ENTRY
-        self.root.splice_children(
-            0..0,
-            vec![SyntaxNode::new_root(builder.finish())
-                .clone_for_update()
-                .into()],
-        );
+        let syntax = SyntaxNode::new_root(builder.finish()).clone_for_update();
+        self.root.splice_children(0..0, vec![syntax.clone().into()]);
+        Entry(syntax)
     }
 }
 
@@ -723,6 +720,40 @@ impl ChangeLog {
             maintainer: crate::get_maintainer(),
             timestamp: Some(chrono::Utc::now().into()),
             change_lines: vec![],
+        }
+    }
+
+    /// Add a change to the changelog.
+    ///
+    /// This will update the current changelog entry if it is considered
+    /// unreleased. Otherwise, a new entry will be created.
+    ///
+    /// If there is an existing entry, the change will be added to the end of
+    /// the entry. If the previous change was attributed to another author,
+    /// a new section line ("[ Author Name ]") will be added as well.
+    ///
+    /// # Arguments
+    /// * `change` - The change to add, e.g. &["* Fix a bug"]
+    /// * `author` - The author of the change, e.g. ("John Doe", "john@example")
+    pub fn auto_add_change(&mut self, change: &[&str], author: (String, String)) {
+        let it = self.entries().next();
+        match it {
+            Some(entry) if entry.is_unreleased() == Some(true) => {
+                // Add to existing entry
+                entry.add_change_for_author(change, author);
+            }
+            Some(_entry) => {
+                // Create new entry
+                let mut builder = self.new_entry();
+                builder = builder.maintainer(author);
+                for change in change {
+                    builder = builder.change_line(change.to_string());
+                }
+                builder.finish();
+            }
+            None => {
+                panic!("No existing entries found in changelog");
+            }
         }
     }
 
@@ -955,6 +986,115 @@ impl Entry {
     /// Returns the urgency of the entry.
     pub fn urgency(&self) -> Option<Urgency> {
         self.header().and_then(|h| h.urgency())
+    }
+
+    /// Add a change for the specified author
+    ///
+    /// If the author is not the same as the current maintainer, a new
+    /// section will be created for the author in the entry (e.g. "[ John Doe ]").
+    pub fn add_change_for_author(&self, change: &[&str], author: (String, String)) {
+        let changes_lines = self.change_lines().collect::<Vec<_>>();
+        let by_author = crate::changes::changes_by_author(changes_lines.iter().map(|s| s.as_str()))
+            .collect::<Vec<_>>();
+
+        // There are no per author sections yet, so attribute current changes to changelog entry author
+        if by_author.iter().all(|(a, _, _)| a.is_none()) {
+            if let Some(maintainer_name) = self.maintainer() {
+                if author.0 != maintainer_name {
+                    self.prepend_change_line(
+                        crate::changes::format_section_title(author.0.as_str()).as_str(),
+                    );
+                    if !self.change_lines().last().unwrap().is_empty() {
+                        self.append_change_line("");
+                    }
+                    self.append_change_line(
+                        crate::changes::format_section_title(author.0.as_str()).as_str(),
+                    );
+                }
+            }
+        } else if let Some(last_section) = by_author.last().as_ref() {
+            if last_section.0 != Some(author.0.as_str()) {
+                self.append_change_line("");
+                self.append_change_line(
+                    crate::changes::format_section_title(author.0.as_str()).as_str(),
+                );
+            }
+        }
+
+        if let Some(last) = self.change_lines().last() {
+            if last.trim().is_empty() {
+                self.pop_change_line();
+            }
+        }
+
+        for line in crate::textwrap::rewrap_changes(change.iter().copied()) {
+            self.append_change_line(line.as_ref());
+        }
+    }
+
+    pub fn prepend_change_line(&self, line: &str) {
+        let mut builder = GreenNodeBuilder::new();
+        builder.start_node(ENTRY_BODY.into());
+        builder.token(INDENT.into(), "  ");
+        builder.token(DETAIL.into(), line);
+        builder.token(NEWLINE.into(), "\n");
+        builder.finish_node();
+
+        // Insert just after the header
+        let mut it = self.0.children();
+        let header = it.find(|n| n.kind() == ENTRY_HEADER);
+
+        let previous_line = it.find(|n| n.kind() == EMPTY_LINE).or(header);
+
+        let index = previous_line.map_or(0, |l| l.index() + 1);
+
+        let syntax = SyntaxNode::new_root(builder.finish()).clone_for_update();
+
+        self.0.splice_children(index..index, vec![syntax.into()]);
+    }
+
+    pub fn pop_change_line(&self) -> Option<String> {
+        // Find the last child of type ENTRY_BODY
+        let last_child = self.0.children().filter(|n| n.kind() == ENTRY_BODY).last();
+
+        if let Some(last_child) = last_child {
+            let text = last_child.children_with_tokens().find_map(|it| {
+                if let Some(token) = it.as_token() {
+                    if token.kind() == DETAIL {
+                        return Some(token.text().to_string());
+                    }
+                }
+                None
+            });
+            self.0
+                .splice_children(last_child.index()..last_child.index() + 1, vec![]);
+            text
+        } else {
+            None
+        }
+    }
+
+    pub fn append_change_line(&self, line: &str) {
+        let mut builder = GreenNodeBuilder::new();
+        builder.start_node(ENTRY_BODY.into());
+        builder.token(INDENT.into(), "  ");
+        builder.token(DETAIL.into(), line);
+        builder.token(NEWLINE.into(), "\n");
+        builder.finish_node();
+
+        // Find the last child of type ENTRY_BODY
+        let last_child = self
+            .0
+            .children()
+            .filter(|n| n.kind() == ENTRY_BODY)
+            .last()
+            .unwrap_or_else(|| self.0.children().next().unwrap());
+
+        let syntax = SyntaxNode::new_root(builder.finish())
+            .clone_for_update()
+            .into();
+        self.0
+            .splice_children(last_child.index() + 1..last_child.index() + 1, vec![syntax]);
     }
 
     /// Returns the changes of the entry.
@@ -1255,4 +1395,55 @@ fn test_new_empty_entry() {
         cl.to_string()
     );
     assert_eq!(cl.entries().next().unwrap().is_unreleased(), Some(true));
+}
+
+#[cfg(test)]
+mod entry_manipulate_tests {
+    use super::*;
+
+    #[test]
+    fn test_append_change_line() {
+        let mut cl = ChangeLog::new();
+
+        let entry = cl
+            .new_empty_entry()
+            .change_line("* A change.".into())
+            .finish();
+
+        entry.append_change_line("* Another change.");
+
+        assert_eq!(
+            r###"
+
+  * A change.
+  * Another change.
+
+ -- 
+"###,
+            cl.to_string()
+        );
+    }
+
+    #[test]
+    fn test_prepend_change_line() {
+        let mut cl = ChangeLog::new();
+
+        let entry = cl
+            .new_empty_entry()
+            .change_line("* A change.".into())
+            .finish();
+
+        entry.prepend_change_line("* Another change.");
+
+        assert_eq!(
+            r###"
+
+  * Another change.
+  * A change.
+
+ -- 
+"###,
+            cl.to_string()
+        );
+    }
 }
