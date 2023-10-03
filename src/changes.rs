@@ -365,3 +365,42 @@ mod add_change_for_author_tests {
         assert_eq!(changes, vec!["[ Author 1 ]", "* Change 1"]);
     }
 }
+
+/// Find additional authors from a changelog entry
+pub fn find_extra_authors<'a>(changes: &[&'a str]) -> std::collections::HashSet<&'a str> {
+    changes_by_author(changes.iter().map(|s| s.as_ref()))
+        .filter_map(|(author, _, _)| author)
+        .collect::<std::collections::HashSet<_>>()
+}
+
+/// Find authors that are thanked in a changelog entry
+pub fn find_thanks<'a>(changes: &[&'a str]) -> std::collections::HashSet<&'a str> {
+    let regex = lazy_regex::regex!(
+        r"[tT]hank(?:(?:s)|(?:you))(?:\s*to)?((?:\\s+(?:(?:\\w\\.)|(?:\\w+(?:-\\w+)*)))+(?:\\s+<[^@>]+@[^@>]+>)?)"
+    );
+    changes_by_author(changes.iter().map(|s| s.as_ref()))
+        .flat_map(|(_, _, lines)| {
+            lines.iter().map(|line| {
+                regex
+                    .captures_iter(line)
+                    .map(|cap| cap.get(1).unwrap().as_str())
+            })
+        })
+        .flatten()
+        .collect::<std::collections::HashSet<_>>()
+}
+
+/// Check if all lines in a changelog entry are prefixed with a sha.
+///
+/// This is generally done by gbp-dch(1).
+pub fn all_sha_prefixed(changes: &[&str]) -> bool {
+    changes_sections(changes.iter().cloned())
+        .flat_map(|section| {
+            section
+                .changes
+                .iter()
+                .map(|ls| ls.into_iter().map(|(_, l)| l))
+                .flatten()
+        })
+        .all(|line| lazy_regex::regex_is_match!(r"^  \* \[[0-9a-f]{7}\] ", line))
+}
