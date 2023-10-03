@@ -373,21 +373,92 @@ pub fn find_extra_authors<'a>(changes: &'a [&'a str]) -> std::collections::HashS
         .collect::<std::collections::HashSet<_>>()
 }
 
+#[test]
+fn test_find_extra_authors() {
+    assert_eq!(
+        find_extra_authors(&["[ Author 1 ]", "* Change 1"]),
+        maplit::hashset! {"Author 1"}
+    );
+    assert_eq!(
+        find_extra_authors(&["[ Author 1 ]", "[ Author 2 ]", "* Change 1"]),
+        maplit::hashset! {"Author 2"}
+    );
+    assert_eq!(
+        find_extra_authors(&["[ Author 1 ]", "[ Author 2 ]", "* Change 1", "* Change 2"]),
+        maplit::hashset! {"Author 2"}
+    );
+    assert_eq!(
+        find_extra_authors(&["[ Author 1 ]", "* Change 1", "[ Author 2 ]", "* Change 2"]),
+        maplit::hashset! {"Author 1", "Author 2"}
+    );
+
+    assert_eq!(
+        find_extra_authors(&["* Change 1", "* Change 2",]),
+        maplit::hashset! {}
+    );
+}
+
 /// Find authors that are thanked in a changelog entry
 pub fn find_thanks<'a>(changes: &'a [&'a str]) -> std::collections::HashSet<&'a str> {
     let regex = lazy_regex::regex!(
-        r"[tT]hank(?:(?:s)|(?:you))(?:\s*to)?((?:\\s+(?:(?:\\w\\.)|(?:\\w+(?:-\\w+)*)))+(?:\\s+<[^@>]+@[^@>]+>)?)"
+        r"[tT]hank(?:(?:s)|(?:you))(?:\s*to)?((?:\s+(?:(?:\w\.)|(?:\w+(?:-\w+)*)))+(?:\s+<[^@>]+@[^@>]+>)?)"
     );
     changes_by_author(changes.iter().copied())
         .flat_map(|(_, _, lines)| {
             lines.into_iter().map(|line| {
                 regex
                     .captures_iter(line)
-                    .map(|cap| cap.get(1).unwrap().as_str())
+                    .map(|m| m.get(1).unwrap().as_str().trim())
             })
         })
         .flatten()
         .collect::<std::collections::HashSet<_>>()
+}
+
+#[test]
+fn test_find_thanks() {
+    assert_eq!(find_thanks(&[]), maplit::hashset! {});
+    assert_eq!(find_thanks(&["* Do foo", "* Do bar"]), maplit::hashset! {});
+    assert_eq!(
+        find_thanks(&["* Thanks to A. Hacker"]),
+        maplit::hashset! {"A. Hacker"}
+    );
+    assert_eq!(
+        find_thanks(&["* Thanks to James A. Hacker"]),
+        maplit::hashset! {"James A. Hacker"}
+    );
+    assert_eq!(
+        find_thanks(&["* Thankyou to B. Hacker"]),
+        maplit::hashset! {"B. Hacker"}
+    );
+    assert_eq!(
+        find_thanks(&["* thanks to A. Hacker"]),
+        maplit::hashset! {"A. Hacker"}
+    );
+    assert_eq!(
+        find_thanks(&["* thankyou to B. Hacker"]),
+        maplit::hashset! {"B. Hacker"}
+    );
+    assert_eq!(
+        find_thanks(&["* Thanks A. Hacker"]),
+        maplit::hashset! {"A. Hacker"}
+    );
+    assert_eq!(
+        find_thanks(&["* Thankyou B.  Hacker"]),
+        maplit::hashset! {"B.  Hacker"}
+    );
+    assert_eq!(
+        find_thanks(&["* Thanks to Mark A. Super-Hacker"]),
+        maplit::hashset! {"Mark A. Super-Hacker"}
+    );
+    assert_eq!(
+        find_thanks(&["* Thanks to A. Hacker <ahacker@example.com>"]),
+        maplit::hashset! {"A. Hacker <ahacker@example.com>"}
+    );
+    assert_eq!(
+        find_thanks(&["* Thanks to Adeodato Simó"]),
+        maplit::hashset! {"Adeodato Simó"}
+    );
 }
 
 /// Check if all lines in a changelog entry are prefixed with a sha.
@@ -401,5 +472,19 @@ pub fn all_sha_prefixed(changes: &[&str]) -> bool {
                 .into_iter()
                 .flat_map(|ls| ls.into_iter().map(|(_, l)| l))
         })
-        .all(|line| lazy_regex::regex_is_match!(r"^  \* \[[0-9a-f]{7}\] ", line))
+        .all(|line| lazy_regex::regex_is_match!(r"^\* \[[0-9a-f]{7}\] ", line))
+}
+
+#[test]
+fn test_all_sha_prefixed() {
+    assert!(all_sha_prefixed(&[
+        "* [a1b2c3d] foo",
+        "* [a1b2c3d] bar",
+        "* [a1b2c3d] baz",
+    ]));
+    assert!(!all_sha_prefixed(&[
+        "* [a1b2c3d] foo",
+        "* bar",
+        "* [a1b2c3d] baz",
+    ]));
 }

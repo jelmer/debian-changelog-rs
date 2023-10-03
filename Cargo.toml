@@ -18,6 +18,7 @@ textwrap = "0.16.0"
 
 [dev-dependencies]
 flate2 = "1.0"
+maplit = "1.0.2"
 
 [dependencies.nix]
 version = "0.27"
