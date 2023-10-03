@@ -6,7 +6,7 @@ use debversion::Version;
 use rowan::ast::AstNode;
 use std::str::FromStr;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
 pub enum Urgency {
     #[default]
     Low,
@@ -747,6 +747,8 @@ impl ChangeLog {
             Some(entry) if entry.is_unreleased() == Some(true) => {
                 // Add to existing entry
                 entry.add_change_for_author(change, author);
+                // TODO: set timestamp to std::cmp::max(entry.timestamp(), datetime)
+                // TODO: set urgency to std::cmp::max(entry.urgency(), urgency)
                 entry
             }
             Some(_entry) => {
