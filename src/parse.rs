@@ -735,21 +735,34 @@ impl ChangeLog {
     /// # Arguments
     /// * `change` - The change to add, e.g. &["* Fix a bug"]
     /// * `author` - The author of the change, e.g. ("John Doe", "john@example")
-    pub fn auto_add_change(&mut self, change: &[&str], author: (String, String)) {
+    pub fn auto_add_change(
+        &mut self,
+        change: &[&str],
+        author: (String, String),
+        datetime: Option<DateTime<FixedOffset>>,
+        urgency: Option<Urgency>,
+    ) -> Entry {
         let it = self.entries().next();
         match it {
             Some(entry) if entry.is_unreleased() == Some(true) => {
                 // Add to existing entry
                 entry.add_change_for_author(change, author);
+                entry
             }
             Some(_entry) => {
                 // Create new entry
                 let mut builder = self.new_entry();
                 builder = builder.maintainer(author);
+                if let Some(datetime) = datetime {
+                    builder = builder.datetime(datetime);
+                }
+                if let Some(urgency) = urgency {
+                    builder = builder.urgency(urgency);
+                }
                 for change in change {
                     builder = builder.change_line(change.to_string());
                 }
-                builder.finish();
+                builder.finish()
             }
             None => {
                 panic!("No existing entries found in changelog");
