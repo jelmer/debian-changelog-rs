@@ -11,7 +11,7 @@
 //!
 //!   * Upload to unstable
 //!
-//!  -- Fabian Grünbichler <debian@fabian.gruenbichler.email>  Wed, 20 Sep 2023 20:18:40 +0200
+//!  -- Jelmer Vernooĳ <jelmer@debian.org>  Wed, 20 Sep 2023 20:18:40 +0200
 //! "#;
 //! let changelog: debian_changelog::ChangeLog = contents.parse().unwrap();
 //! assert_eq!(
@@ -27,7 +27,7 @@ use lazy_regex::regex_captures;
 pub mod changes;
 pub mod textwrap;
 
-pub use crate::parse::{Error, ParseError};
+pub use crate::parse::{ChangeLog, Entry, Error, ParseError, Urgency};
 
 /// See https://manpages.debian.org/bookworm/dpkg-dev/deb-changelog.5.en.html
 
@@ -73,8 +73,6 @@ impl From<SyntaxKind> for rowan::SyntaxKind {
         Self(kind as u16)
     }
 }
-
-pub use crate::parse::{ChangeLog, Entry};
 
 pub fn get_maintainer_from_env(
     get_env: impl Fn(&str) -> Option<String>,
@@ -322,12 +320,23 @@ mod is_unreleased_inaugural_tests {
 const DEFAULT_DISTRIBUTION: &[&str] = &["UNRELEASED"];
 
 /// Create a release for a changelog file.
+///
+/// # Arguments
+/// * `cl` - The changelog to release
+/// * `distribution` - The distribution to release to. If None, the distribution
+///      of the previous entry is used.
+///  * `timestamp` - The timestamp to use for the release. If None, the current time is used.
+///  * `maintainer` - The maintainer to use for the release. If None, the maintainer
+///       is extracted from the environment.
+///
+/// # Returns
+/// Whether a release was created.
 pub fn release(
     cl: &mut ChangeLog,
     distribution: Option<Vec<String>>,
     timestamp: Option<chrono::DateTime<chrono::FixedOffset>>,
     maintainer: Option<(String, String)>,
-) {
+) -> bool {
     let mut entries = cl.entries();
     let mut first_entry = entries.next().unwrap();
     let second_entry = entries.next();
@@ -349,6 +358,9 @@ pub fn release(
         first_entry.set_distributions(distribution);
         let timestamp = timestamp.unwrap_or(chrono::offset::Utc::now().into());
         first_entry.set_datetime(timestamp);
+        true
+    } else {
+        false
     }
 }
 
