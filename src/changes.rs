@@ -367,20 +367,20 @@ mod add_change_for_author_tests {
 }
 
 /// Find additional authors from a changelog entry
-pub fn find_extra_authors<'a>(changes: &[&'a str]) -> std::collections::HashSet<&'a str> {
-    changes_by_author(changes.iter().map(|s| s.as_ref()))
+pub fn find_extra_authors<'a>(changes: &'a [&'a str]) -> std::collections::HashSet<&'a str> {
+    changes_by_author(changes.iter().copied())
         .filter_map(|(author, _, _)| author)
         .collect::<std::collections::HashSet<_>>()
 }
 
 /// Find authors that are thanked in a changelog entry
-pub fn find_thanks<'a>(changes: &[&'a str]) -> std::collections::HashSet<&'a str> {
+pub fn find_thanks<'a>(changes: &'a [&'a str]) -> std::collections::HashSet<&'a str> {
     let regex = lazy_regex::regex!(
         r"[tT]hank(?:(?:s)|(?:you))(?:\s*to)?((?:\\s+(?:(?:\\w\\.)|(?:\\w+(?:-\\w+)*)))+(?:\\s+<[^@>]+@[^@>]+>)?)"
     );
-    changes_by_author(changes.iter().map(|s| s.as_ref()))
+    changes_by_author(changes.iter().copied())
         .flat_map(|(_, _, lines)| {
-            lines.iter().map(|line| {
+            lines.into_iter().map(|line| {
                 regex
                     .captures_iter(line)
                     .map(|cap| cap.get(1).unwrap().as_str())
@@ -398,9 +398,8 @@ pub fn all_sha_prefixed(changes: &[&str]) -> bool {
         .flat_map(|section| {
             section
                 .changes
-                .iter()
-                .map(|ls| ls.into_iter().map(|(_, l)| l))
-                .flatten()
+                .into_iter()
+                .flat_map(|ls| ls.into_iter().map(|(_, l)| l))
         })
         .all(|line| lazy_regex::regex_is_match!(r"^  \* \[[0-9a-f]{7}\] ", line))
 }

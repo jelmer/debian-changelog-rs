@@ -376,11 +376,14 @@ pub fn take_uploadership(entry: &mut Entry, maintainer: Option<(String, String)>
         get_maintainer().unwrap()
     };
     if let (Some(current_maintainer), Some(current_email)) = (entry.maintainer(), entry.email()) {
-        if (current_maintainer != maintainer_name || current_email != maintainer_email)
-            && entry.change_lines().count() >= 2
-            && !entry.change_lines().next().unwrap().starts_with("  [ ")
-        {
-            entry.prepend_change_line(format!("  [ {} ]", current_maintainer).as_str());
+        if current_maintainer != maintainer_name || current_email != maintainer_email {
+            if let Some(first_line) = entry.change_lines().next() {
+                if first_line.starts_with("[ ") {
+                    entry.prepend_change_line(
+                        crate::changes::format_section_title(current_maintainer.as_str()).as_str(),
+                    );
+                }
+            }
         }
     }
     entry.set_maintainer((maintainer_name, maintainer_email));
