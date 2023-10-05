@@ -77,7 +77,6 @@ impl From<SyntaxKind> for rowan::SyntaxKind {
 pub fn get_maintainer_from_env(
     get_env: impl Fn(&str) -> Option<String>,
 ) -> Option<(String, String)> {
-    use nix::unistd;
     use std::io::BufRead;
 
     let mut debemail = get_env("DEBEMAIL");
@@ -109,25 +108,7 @@ pub fn get_maintainer_from_env(
     } else if let Some(m) = get_env("NAME") {
         Some(m.trim().to_string())
     } else {
-        // Use password database if no data in environment variables
-        match unistd::User::from_uid(unistd::getuid()) {
-            Ok(Some(user)) => {
-                if let Ok(gecos) = user.gecos.to_str() {
-                    let mut parts = gecos.split(',');
-                    parts.next().map(|name_part| name_part.to_string())
-                } else {
-                    None
-                }
-            }
-            Ok(None) => {
-                // Hmm, user doesn't exist?
-                None
-            }
-            Err(e) => {
-                log::error!("Error getting information for current user: {}", e);
-                None
-            }
-        }
+        Some(whoami::realname())
     };
 
     // Get maintainer's mail address
@@ -149,28 +130,10 @@ pub fn get_maintainer_from_env(
         }
 
         if addr.is_none() {
-            if let Ok(hostname) = nix::unistd::gethostname() {
-                if let Some(host) = hostname.to_str() {
-                    addr = Some(host.to_string());
-                }
-            }
+            addr = Some(whoami::hostname());
         }
 
-        if let Some(hostname) = addr {
-            match unistd::User::from_uid(unistd::getuid()) {
-                Ok(Some(user)) => Some(format!("{}@{}", user.name, hostname)),
-                Ok(None) => {
-                    // Hmm, user doesn't exist?
-                    None
-                }
-                Err(e) => {
-                    log::error!("Error getting information for current user: {}", e);
-                    None
-                }
-            }
-        } else {
-            None
-        }
+        addr.map(|hostname| format!("{}@{}", whoami::username(), hostname))
     };
 
     if let (Some(maintainer), Some(email_address)) = (maintainer, email_address) {

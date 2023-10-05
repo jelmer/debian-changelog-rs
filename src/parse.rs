@@ -147,6 +147,12 @@ fn parse(text: &str) -> Parse {
 
             self.skip_ws();
 
+            if self.current() == Some(NEWLINE) {
+                self.bump();
+                self.builder.finish_node();
+                return;
+            }
+
             self.expect(VERSION);
 
             self.builder.start_node(DISTRIBUTIONS.into());
@@ -155,6 +161,12 @@ fn parse(text: &str) -> Parse {
 
                 match self.current() {
                     Some(IDENTIFIER) => self.bump(),
+                    Some(NEWLINE) => {
+                        self.bump();
+                        self.builder.finish_node();
+                        self.builder.finish_node();
+                        return;
+                    }
                     Some(SEMICOLON) => {
                         break;
                     }
@@ -291,16 +303,24 @@ fn parse(text: &str) -> Parse {
             }
             self.builder.finish_node();
 
-            self.expect(WHITESPACE);
+            if self.current().is_some() && self.current() != Some(NEWLINE) {
+                self.expect(WHITESPACE);
+            }
 
-            self.expect(EMAIL);
+            if self.current().is_some() && self.current() != Some(NEWLINE) {
+                self.expect(EMAIL);
+            }
 
             if self.tokens.last().map(|(k, t)| (*k, t.as_str())) == Some((WHITESPACE, "  ")) {
                 self.bump();
             } else if self.current() == Some(WHITESPACE) {
                 self.error("expected two spaces".to_string());
+            } else if self.current() == Some(NEWLINE) {
+                self.bump();
+                self.builder.finish_node();
+                return;
             } else {
-                self.error("expected whitespace".to_string());
+                self.error(format!("expected whitespace, got {:?}", self.current()));
             }
 
             self.builder.start_node(TIMESTAMP.into());
@@ -565,6 +585,15 @@ impl EntryBuilder {
     }
 
     pub fn finish(self) -> Entry {
+        if self.root.children().find_map(Entry::cast).is_some() {
+            let mut builder = GreenNodeBuilder::new();
+            builder.start_node(EMPTY_LINE.into());
+            builder.token(NEWLINE.into(), "\n");
+            builder.finish_node();
+            let syntax = SyntaxNode::new_root(builder.finish()).clone_for_update();
+            self.root.splice_children(0..0, vec![syntax.into()]);
+        }
+
         let mut builder = GreenNodeBuilder::new();
         builder.start_node(ENTRY.into());
         builder.start_node(ENTRY_HEADER.into());
@@ -699,14 +728,19 @@ impl ChangeLog {
         }
     }
 
+    fn first_valid_entry(&self) -> Option<Entry> {
+        self.entries().find(|entry| {
+            entry.package().is_some() && entry.header().is_some() && entry.footer().is_some()
+        })
+    }
+
     pub fn new_entry(&mut self) -> EntryBuilder {
-        let package = self
-            .entries()
-            .next()
+        let base_entry = self.first_valid_entry();
+        let package = base_entry
+            .as_ref()
             .and_then(|first_entry| first_entry.package());
-        let mut version = self
-            .entries()
-            .next()
+        let mut version = base_entry
+            .as_ref()
             .and_then(|first_entry| first_entry.version());
         if let Some(version) = version.as_mut() {
             version.increment_debian();
@@ -742,9 +776,8 @@ impl ChangeLog {
         datetime: Option<DateTime<FixedOffset>>,
         urgency: Option<Urgency>,
     ) -> Entry {
-        let it = self.entries().next();
-        match it {
-            Some(entry) if entry.is_unreleased() == Some(true) => {
+        match self.first_valid_entry() {
+            Some(entry) if entry.is_unreleased() != Some(false) => {
                 // Add to existing entry
                 entry.add_change_for_author(change, author);
                 // TODO: set timestamp to std::cmp::max(entry.timestamp(), datetime)
@@ -801,6 +834,14 @@ impl ChangeLog {
         let mut buf = String::new();
         r.read_to_string(&mut buf)?;
         Ok(buf.parse()?)
+    }
+
+    pub fn read_relaxed<R: std::io::Read>(mut r: R) -> Result<ChangeLog, Error> {
+        let mut buf = String::new();
+        r.read_to_string(&mut buf)?;
+
+        let parsed = parse(&buf);
+        Ok(parsed.root().clone_for_update())
     }
 }
 
@@ -931,6 +972,7 @@ impl EntryFooter {
             .children()
             .find_map(Maintainer::cast)
             .map(|m| m.text())
+            .filter(|s| !s.is_empty())
     }
 
     pub fn set_maintainer(&mut self, maintainer: (String, String)) {
@@ -979,6 +1021,38 @@ impl Timestamp {
 impl Maintainer {
     fn text(&self) -> String {
         self.0.text().to_string()
+    }
+}
+
+impl std::fmt::Debug for Entry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut debug = f.debug_struct("Entry");
+        if let Some(package) = self.package() {
+            debug.field("package", &package);
+        }
+        if let Some(version) = self.version() {
+            debug.field("version", &version);
+        }
+        if let Some(urgency) = self.urgency() {
+            debug.field("urgency", &urgency);
+        }
+        if let Some(maintainer) = self.maintainer() {
+            debug.field("maintainer", &maintainer);
+        }
+        if let Some(email) = self.email() {
+            debug.field("email", &email);
+        }
+        if let Some(timestamp) = self.timestamp() {
+            debug.field("timestamp", &timestamp);
+        }
+        if let Some(distributions) = self.distributions() {
+            debug.field("distributions", &distributions);
+        }
+        if let Some(urgency) = self.urgency() {
+            debug.field("urgency", &urgency);
+        }
+        debug.field("body", &self.change_lines().collect::<Vec<_>>());
+        debug.finish()
     }
 }
 
@@ -1097,7 +1171,7 @@ impl Entry {
             if let Some(maintainer_name) = self.maintainer() {
                 if author.0 != maintainer_name {
                     self.prepend_change_line(
-                        crate::changes::format_section_title(author.0.as_str()).as_str(),
+                        crate::changes::format_section_title(maintainer_name.as_str()).as_str(),
                     );
                     if !self.change_lines().last().unwrap().is_empty() {
                         self.append_change_line("");
@@ -1130,8 +1204,10 @@ impl Entry {
     pub fn prepend_change_line(&self, line: &str) {
         let mut builder = GreenNodeBuilder::new();
         builder.start_node(ENTRY_BODY.into());
-        builder.token(INDENT.into(), "  ");
-        builder.token(DETAIL.into(), line);
+        if !line.is_empty() {
+            builder.token(INDENT.into(), "  ");
+            builder.token(DETAIL.into(), line);
+        }
         builder.token(NEWLINE.into(), "\n");
         builder.finish_node();
 
@@ -1172,8 +1248,10 @@ impl Entry {
     pub fn append_change_line(&self, line: &str) {
         let mut builder = GreenNodeBuilder::new();
         builder.start_node(ENTRY_BODY.into());
-        builder.token(INDENT.into(), "  ");
-        builder.token(DETAIL.into(), line);
+        if !line.is_empty() {
+            builder.token(INDENT.into(), "  ");
+            builder.token(DETAIL.into(), line);
+        }
         builder.token(NEWLINE.into(), "\n");
         builder.finish_node();
 
@@ -1221,19 +1299,24 @@ impl Entry {
 
     /// Return whether the entry is marked as being unreleased
     pub fn is_unreleased(&self) -> Option<bool> {
-        self.distributions()
-            .as_ref()
-            .map(|ds| {
-                let ds = ds.iter().map(|d| d.as_str()).collect::<Vec<&str>>();
-                crate::distributions_is_unreleased(ds.as_slice())
-            })
-            .or_else(|| {
-                if self.maintainer().is_none() && self.email().is_none() {
-                    Some(true)
-                } else {
-                    None
-                }
-            })
+        let distro_is_unreleased = self.distributions().as_ref().map(|ds| {
+            let ds = ds.iter().map(|d| d.as_str()).collect::<Vec<&str>>();
+            crate::distributions_is_unreleased(ds.as_slice())
+        });
+
+        let footer_is_unreleased = if self.maintainer().is_none() && self.email().is_none() {
+            Some(true)
+        } else {
+            None
+        };
+
+        match (distro_is_unreleased, footer_is_unreleased) {
+            (Some(true), _) => Some(true),
+            (_, Some(true)) => Some(true),
+            (Some(false), _) => Some(false),
+            (_, Some(false)) => Some(false),
+            _ => None,
+        }
     }
 }
 
@@ -1492,6 +1575,30 @@ fn test_new_empty_entry() {
     assert_eq!(cl.entries().next().unwrap().is_unreleased(), Some(true));
 }
 
+#[test]
+fn test_parse_invalid_line() {
+    let text = r#"THIS IS NOT A PARSEABLE LINE
+lintian-brush (0.35) UNRELEASED; urgency=medium
+
+  * Support updating templated debian/control files that use cdbs
+    template.
+
+ -- Joe Example <joe@example.com>  Fri, 04 Oct 2019 02:36:13 +0000
+"#;
+    let cl = ChangeLog::read_relaxed(text.as_bytes()).unwrap();
+    let entry = cl.entries().nth(1).unwrap();
+    assert_eq!(entry.package(), Some("lintian-brush".into()));
+    assert_eq!(entry.version(), Some("0.35".parse().unwrap()));
+    assert_eq!(entry.urgency(), Some(Urgency::Medium));
+    assert_eq!(entry.maintainer(), Some("Joe Example".into()));
+    assert_eq!(entry.email(), Some("joe@example.com".into()));
+    assert_eq!(entry.distributions(), Some(vec!["UNRELEASED".into()]));
+    assert_eq!(
+        entry.datetime(),
+        Some("2019-10-04T02:36:13+00:00".parse().unwrap())
+    );
+}
+
 #[cfg(test)]
 mod entry_manipulate_tests {
     use super::*;
@@ -1539,6 +1646,57 @@ mod entry_manipulate_tests {
  -- 
 "###,
             cl.to_string()
+        );
+
+        assert_eq!(entry.maintainer(), None);
+        assert_eq!(entry.email(), None);
+        assert_eq!(entry.timestamp(), None);
+        assert_eq!(entry.package(), None);
+        assert_eq!(entry.version(), None);
+    }
+}
+
+#[cfg(test)]
+mod auto_add_change_tests {
+    #[test]
+    fn test_unreleased_existing() {
+        let text = r#"lintian-brush (0.35) unstable; urgency=medium
+
+  * This line already existed.
+
+  [ Jane Example ]
+  * And this one has an existing author.
+
+ -- 
+"#;
+        let mut cl = super::ChangeLog::read(text.as_bytes()).unwrap();
+
+        let entry = cl.entries().next().unwrap();
+        assert_eq!(entry.package(), Some("lintian-brush".into()));
+        assert_eq!(entry.is_unreleased(), Some(true));
+
+        let entry = cl.auto_add_change(
+            &["* And this one is new."],
+            ("Joe Example".to_string(), "joe@example.com".to_string()),
+            None,
+            None,
+        );
+
+        assert_eq!(cl.entries().count(), 1);
+
+        assert_eq!(entry.package(), Some("lintian-brush".into()));
+        assert_eq!(entry.is_unreleased(), Some(true));
+        assert_eq!(
+            entry.change_lines().collect::<Vec<_>>(),
+            &[
+                "* This line already existed.",
+                "",
+                "[ Jane Example ]",
+                "* And this one has an existing author.",
+                "",
+                "[ Joe Example ]",
+                "* And this one is new.",
+            ]
         );
     }
 }
