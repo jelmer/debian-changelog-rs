@@ -713,13 +713,14 @@ impl ChangeLog {
     }
 
     pub fn new_entry(&mut self) -> EntryBuilder {
-        let package = self
+        let base_entry = self
             .entries()
-            .next()
+            .find(|entry| entry.package().is_some() && entry.version().is_some());
+        let package = base_entry
+            .as_ref()
             .and_then(|first_entry| first_entry.package());
-        let mut version = self
-            .entries()
-            .next()
+        let mut version = base_entry
+            .as_ref()
             .and_then(|first_entry| first_entry.version());
         if let Some(version) = version.as_mut() {
             version.increment_debian();
@@ -952,6 +953,7 @@ impl EntryFooter {
             .children()
             .find_map(Maintainer::cast)
             .map(|m| m.text())
+            .filter(|s| !s.is_empty())
     }
 
     pub fn set_maintainer(&mut self, maintainer: (String, String)) {
@@ -1565,5 +1567,11 @@ mod entry_manipulate_tests {
 "###,
             cl.to_string()
         );
+
+        assert_eq!(entry.maintainer(), None);
+        assert_eq!(entry.email(), None);
+        assert_eq!(entry.timestamp(), None);
+        assert_eq!(entry.package(), None);
+        assert_eq!(entry.version(), None);
     }
 }
