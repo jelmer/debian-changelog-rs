@@ -1097,7 +1097,7 @@ impl Entry {
             if let Some(maintainer_name) = self.maintainer() {
                 if author.0 != maintainer_name {
                     self.prepend_change_line(
-                        crate::changes::format_section_title(author.0.as_str()).as_str(),
+                        crate::changes::format_section_title(maintainer_name.as_str()).as_str(),
                     );
                     if !self.change_lines().last().unwrap().is_empty() {
                         self.append_change_line("");
