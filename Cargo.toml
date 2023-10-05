@@ -15,11 +15,8 @@ lazy-regex = "3.0.2"
 log = "0.4"
 rowan = "0.15.11"
 textwrap = "0.16.0"
+whoami = { version = "1", default-features = false }
 
 [dev-dependencies]
 flate2 = "1.0"
 maplit = "1.0.2"
-
-[dependencies.nix]
-version = "0.27"
-features = [ "hostname", "user",]
