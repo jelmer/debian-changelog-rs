@@ -291,9 +291,13 @@ fn parse(text: &str) -> Parse {
             }
             self.builder.finish_node();
 
-            self.expect(WHITESPACE);
+            if self.current().is_some() && self.current() != Some(NEWLINE) {
+                self.expect(WHITESPACE);
+            }
 
-            self.expect(EMAIL);
+            if self.current().is_some() && self.current() != Some(NEWLINE) {
+                self.expect(EMAIL);
+            }
 
             if self.tokens.last().map(|(k, t)| (*k, t.as_str())) == Some((WHITESPACE, "  ")) {
                 self.bump();
@@ -565,6 +569,15 @@ impl EntryBuilder {
     }
 
     pub fn finish(self) -> Entry {
+        if self.root.children().find_map(Entry::cast).is_some() {
+            let mut builder = GreenNodeBuilder::new();
+            builder.start_node(EMPTY_LINE.into());
+            builder.token(NEWLINE.into(), "\n");
+            builder.finish_node();
+            let syntax = SyntaxNode::new_root(builder.finish()).clone_for_update();
+            self.root.splice_children(0..0, vec![syntax.into()]);
+        }
+
         let mut builder = GreenNodeBuilder::new();
         builder.start_node(ENTRY.into());
         builder.start_node(ENTRY_HEADER.into());
@@ -744,7 +757,7 @@ impl ChangeLog {
     ) -> Entry {
         let it = self.entries().next();
         match it {
-            Some(entry) if entry.is_unreleased() == Some(true) => {
+            Some(entry) if entry.is_unreleased() != Some(false) => {
                 // Add to existing entry
                 entry.add_change_for_author(change, author);
                 // TODO: set timestamp to std::cmp::max(entry.timestamp(), datetime)
@@ -801,6 +814,14 @@ impl ChangeLog {
         let mut buf = String::new();
         r.read_to_string(&mut buf)?;
         Ok(buf.parse()?)
+    }
+
+    pub fn read_relaxed<R: std::io::Read>(mut r: R) -> Result<ChangeLog, Error> {
+        let mut buf = String::new();
+        r.read_to_string(&mut buf)?;
+
+        let parsed = parse(&buf);
+        Ok(parsed.root().clone_for_update())
     }
 }
 
@@ -1130,8 +1151,10 @@ impl Entry {
     pub fn prepend_change_line(&self, line: &str) {
         let mut builder = GreenNodeBuilder::new();
         builder.start_node(ENTRY_BODY.into());
-        builder.token(INDENT.into(), "  ");
-        builder.token(DETAIL.into(), line);
+        if !line.is_empty() {
+            builder.token(INDENT.into(), "  ");
+            builder.token(DETAIL.into(), line);
+        }
         builder.token(NEWLINE.into(), "\n");
         builder.finish_node();
 
@@ -1172,8 +1195,10 @@ impl Entry {
     pub fn append_change_line(&self, line: &str) {
         let mut builder = GreenNodeBuilder::new();
         builder.start_node(ENTRY_BODY.into());
-        builder.token(INDENT.into(), "  ");
-        builder.token(DETAIL.into(), line);
+        if !line.is_empty() {
+            builder.token(INDENT.into(), "  ");
+            builder.token(DETAIL.into(), line);
+        }
         builder.token(NEWLINE.into(), "\n");
         builder.finish_node();
 
