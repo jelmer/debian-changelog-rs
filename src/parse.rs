@@ -491,6 +491,7 @@ impl MetadataEntry {
     }
 }
 
+/// A builder for a changelog entry.
 pub struct EntryBuilder {
     root: SyntaxNode,
     package: Option<String>,
@@ -503,18 +504,21 @@ pub struct EntryBuilder {
 }
 
 impl EntryBuilder {
+    /// Set the package name
     #[must_use]
     pub fn package(mut self, package: String) -> Self {
         self.package = Some(package);
         self
     }
 
+    /// Set the package version
     #[must_use]
     pub fn version(mut self, version: Version) -> Self {
         self.version = Some(version);
         self
     }
 
+    /// Set the distribution(s)
     #[must_use]
     pub fn distributions(mut self, distributions: Vec<String>) -> Self {
         self.distributions = Some(distributions);
@@ -734,6 +738,7 @@ impl ChangeLog {
         })
     }
 
+    /// Return a builder for a new entry.
     pub fn new_entry(&mut self) -> EntryBuilder {
         let base_entry = self.first_valid_entry();
         let package = base_entry
