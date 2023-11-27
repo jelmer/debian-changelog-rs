@@ -1,7 +1,6 @@
 //! A lossless parser for Debian changelog files.
 //!
-//! As documented in Debian Policy:
-//! https://www.debian.org/doc/debian-policy/ch-source.html#debian-changelog-debian-changelog
+//! For its format specification, see [Debian Policy](https://www.debian.org/doc/debian-policy/ch-source.html#debian-changelog-debian-changelog).
 //!
 //! Example:
 //!
