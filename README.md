@@ -31,3 +31,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+Or to update an existing changelog file:
+
+```rust
+
+use std::io::Read;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let file = std::fs::File::open("debian/changelog")?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
+    let changelog: debian_changelog::ChangeLog = contents.parse()?;
+    changelog.auto_add_change(
+        &["* Make a change"],
+        (
+            "Jelmer Vernooĳ".to_string(),
+            "jelmer@debian.org".to_string(),
+        ),
+        None,
+        None,
+    );
+    std::fs::write("debian/changelog", changelog.to_string())?;
+    Ok(())
+}
+```
