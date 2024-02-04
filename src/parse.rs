@@ -848,6 +848,18 @@ impl ChangeLog {
         let parsed = parse(&buf);
         Ok(parsed.root().clone_for_update())
     }
+
+    pub fn write<W: std::io::Write>(mut w: W) -> Result<(), Error> {
+        let buf = self.to_string();
+        w.write_all(buf.as_bytes())?;
+        Ok(())
+    }
+
+    pub fn write_to_path(p: &std::path::Path) -> Result<(), Error> {
+        let mut f = std::fs::File::create(p)?;
+        self.write(f)?;
+        Ok(())
+    }
 }
 
 impl Default for ChangeLog {
