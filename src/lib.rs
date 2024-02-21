@@ -350,3 +350,25 @@ pub fn take_uploadership(entry: &mut Entry, maintainer: Option<(String, String)>
     }
     entry.set_maintainer((maintainer_name, maintainer_email));
 }
+
+/// Update changelog with commit messages from commits
+pub fn gbp_dch(path: &std::path::Path) -> std::result::Result<(), std::io::Error> {
+    // Run the "gbp dch" command with working copy at `path`
+    let output = std::process::Command::new("gbp")
+        .arg("dch")
+        .arg("--ignore-branch")
+        .current_dir(path)
+        .output()?;
+
+    if !output.status.success() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!(
+                "gbp dch failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        ));
+    }
+
+    Ok(())
+}
