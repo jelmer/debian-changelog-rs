@@ -4,7 +4,7 @@
 //! The main function is `textwrap`, which takes a string and wraps it to a
 //! specified width, without breaking in between "Closes: #XXXXXX" fragments.
 
-use lazy_regex::{regex_captures};
+use lazy_regex::regex_captures;
 use std::borrow::Cow;
 use textwrap::core::Word;
 
