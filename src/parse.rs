@@ -1314,6 +1314,14 @@ impl Entry {
         lines.into_iter().skip_while(|it| it.is_empty())
     }
 
+    pub fn ensure_first_line(&self, line: &str) {
+        let first_line = self.change_lines().next().map(|it| it.trim().to_string());
+
+        if first_line != Some(line.to_string()) {
+            self.prepend_change_line(line);
+        }
+    }
+
     /// Return whether the entry is marked as being unreleased
     pub fn is_unreleased(&self) -> Option<bool> {
         let distro_is_unreleased = self.distributions().as_ref().map(|ds| {
@@ -1716,4 +1724,38 @@ mod auto_add_change_tests {
             ]
         );
     }
+}
+
+#[test]
+fn test_ensure_first_line() {
+    let text = r#"lintian-brush (0.35) unstable; urgency=medium
+
+  * This line already existed.
+
+  [ Jane Example ]
+  * And this one has an existing author.
+
+ -- 
+"#;
+    let mut cl = ChangeLog::read(text.as_bytes()).unwrap();
+
+    let entry = cl.entries().next().unwrap();
+    assert_eq!(entry.package(), Some("lintian-brush".into()));
+
+    entry.ensure_first_line("* QA upload.");
+    entry.ensure_first_line("* QA upload.");
+
+    assert_eq!(
+        r#"lintian-brush (0.35) unstable; urgency=medium
+
+  * QA upload.
+  * This line already existed.
+
+  [ Jane Example ]
+  * And this one has an existing author.
+
+ -- 
+"#,
+        cl.to_string()
+    );
 }
