@@ -6,7 +6,8 @@ fn main() {
     let mut changelog = ChangeLog::new();
 
     // Note that most of these are optional and fall back to sensible defaults.
-    changelog.new_entry()
+    changelog
+        .new_entry()
         .package("example".to_string())
         .version("0.1.0".parse().unwrap())
         .distribution("unstable".to_string())
