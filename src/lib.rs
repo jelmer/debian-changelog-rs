@@ -129,7 +129,15 @@ pub fn get_maintainer_from_env(
         }
 
         if addr.is_none() {
-            addr = Some(whoami::hostname());
+            match whoami::fallible::hostname() {
+                Ok(hostname) => {
+                    addr = Some(hostname);
+                }
+                Err(e) => {
+                    log::debug!("Failed to get hostname: {}", e);
+                    addr = None;
+                }
+            }
         }
 
         addr.map(|hostname| format!("{}@{}", whoami::username(), hostname))
