@@ -9,7 +9,7 @@ readme = "README.md"
 authors = [ "Jelmer Vernooij <jelmer@jelmer.uk>",]
 
 [dependencies]
-chrono = "0.4.37"
+chrono = "0.4.38"
 debversion = ">=0.2"
 lazy-regex = "3.0.2"
 log = "0.4"
