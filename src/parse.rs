@@ -16,14 +16,14 @@ pub enum Urgency {
     Critical,
 }
 
-impl ToString for Urgency {
-    fn to_string(&self) -> String {
+impl std::fmt::Display for Urgency {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Urgency::Low => "low".to_string(),
-            Urgency::Medium => "medium".to_string(),
-            Urgency::High => "high".to_string(),
-            Urgency::Emergency => "emergency".to_string(),
-            Urgency::Critical => "critical".to_string(),
+            Urgency::Low => f.write_str("low"),
+            Urgency::Medium => f.write_str("medium"),
+            Urgency::High => f.write_str("high"),
+            Urgency::Emergency => f.write_str("emergency"),
+            Urgency::Critical => f.write_str("critical"),
         }
     }
 }
@@ -456,9 +456,9 @@ macro_rules! ast_node {
             }
         }
 
-        impl ToString for $ast {
-            fn to_string(&self) -> String {
-                self.0.text().to_string()
+        impl std::fmt::Display for $ast {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str(self.0.text().to_string().as_str())
             }
         }
     };
