@@ -73,6 +73,25 @@ impl From<SyntaxKind> for rowan::SyntaxKind {
     }
 }
 
+/// Parse a identity string
+///
+/// # Arguments
+/// * `s` - The string to parse
+///
+/// # Returns
+/// A tuple with name and email address
+pub fn parseaddr(s: &str) -> (Option<&str>, &str) {
+    if let Some((_, name, email)) = regex_captures!(r"^(.*)\s+<(.*)>$", s) {
+        if name.is_empty() {
+            (None, email)
+        } else {
+            (Some(name), email)
+        }
+    } else {
+        (None, s)
+    }
+}
+
 pub fn get_maintainer_from_env(
     get_env: impl Fn(&str) -> Option<String>,
 ) -> Option<(String, String)> {
@@ -83,21 +102,23 @@ pub fn get_maintainer_from_env(
 
     // Split email and name
     if let Some(email) = debemail.as_ref() {
-        if let Some((_, name, email)) = regex_captures!(r"^(.*)\s+<(.*)>$", email.as_str()) {
+        let (parsed_name, parsed_email) = parseaddr(email);
+        if let Some(parsed_name) = parsed_name {
             if debfullname.is_none() {
-                debfullname = Some(name.to_string());
+                debfullname = Some(parsed_name.to_string());
             }
-            debemail = Some(email.to_string());
         }
+        debemail = Some(parsed_email.to_string());
     }
     if debfullname.is_none() || debemail.is_none() {
         if let Some(email) = get_env("EMAIL") {
-            if let Some((_, name, email)) = regex_captures!(r"^(.*)\s+<(.*)>$", email.as_str()) {
+            let (parsed_name, parsed_email) = parseaddr(email.as_str());
+            if let Some(parsed_name) = parsed_name {
                 if debfullname.is_none() {
-                    debfullname = Some(name.to_string());
+                    debfullname = Some(parsed_name.to_string());
                 }
-                debemail = Some(email.to_string());
             }
+            debemail = Some(parsed_email.to_string());
         }
     }
 
@@ -379,4 +400,23 @@ pub fn gbp_dch(path: &std::path::Path) -> std::result::Result<(), std::io::Error
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parseaddr() {
+        assert_eq!(
+            (Some("Jelmer"), "jelmer@jelmer.uk"),
+            parseaddr("Jelmer <jelmer@jelmer.uk>")
+        );
+        assert_eq!((None, "jelmer@jelmer.uk"), parseaddr("jelmer@jelmer.uk"));
+    }
+
+    #[test]
+    fn test_parseaddr_empty() {
+        assert_eq!((None, ""), parseaddr(""));
+    }
 }
