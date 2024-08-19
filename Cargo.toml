@@ -13,7 +13,7 @@ chrono = "0.4.38"
 debversion = ">=0.2"
 lazy-regex = "3.2.0"
 log = "0.4"
-rowan = "0.15.11"
+rowan = "0.15.16"
 textwrap = "0.16.0"
 whoami = { version = "1", default-features = false }
 
