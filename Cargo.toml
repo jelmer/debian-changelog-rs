@@ -11,7 +11,7 @@ authors = [ "Jelmer Vernooij <jelmer@jelmer.uk>",]
 [dependencies]
 chrono = "0.4.38"
 debversion = ">=0.2"
-lazy-regex = "3.2.0"
+lazy-regex = "3.3.0"
 log = "0.4"
 rowan = "0.15.16"
 textwrap = "0.16.0"
