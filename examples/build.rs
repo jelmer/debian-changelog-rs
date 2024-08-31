@@ -19,5 +19,5 @@ fn main() {
 
     // You can also use changelog.auto_add_change(), which behaves similarly to "dch"
 
-    println!("{}", changelog.to_string());
+    println!("{}", changelog);
 }

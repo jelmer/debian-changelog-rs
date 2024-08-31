@@ -202,6 +202,39 @@ mod get_maintainer_from_env_tests {
     }
 }
 
+/// Simple representation of an identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Identity {
+    /// Name of the maintainer
+    pub name: String,
+
+    /// Email address of the maintainer
+    pub email: String,
+}
+
+impl Identity {
+    pub fn new(name: String, email: String) -> Self {
+        Self { name, email }
+    }
+
+    /// Get the maintainer information from the environment.
+    pub fn from_env() -> Option<Self> {
+        get_maintainer().map(|(name, email)| Self { name, email })
+    }
+}
+
+impl From<(String, String)> for Identity {
+    fn from((name, email): (String, String)) -> Self {
+        Self { name, email }
+    }
+}
+
+impl std::fmt::Display for Identity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} <{}>", self.name, self.email)
+    }
+}
+
 /// Check if the given distribution marks an unreleased entry.
 pub fn distribution_is_unreleased(distribution: &str) -> bool {
     distribution == "UNRELEASED" || distribution.starts_with("UNRELEASED-")
