@@ -856,7 +856,7 @@ impl ChangeLog {
     }
 
     pub fn write_to_path(&self, p: &std::path::Path) -> Result<(), Error> {
-        let mut f = std::fs::File::create(p)?;
+        let f = std::fs::File::create(p)?;
         self.write(f)?;
         Ok(())
     }
@@ -925,19 +925,23 @@ impl EntryHeader {
         })
     }
 
-    pub fn set_distributions(&mut self, distributions: Vec<String>) {
+    /// Set distributions for the entry.
+    pub fn set_distributions(&mut self, _distributions: Vec<String>) {
         todo!("set_distributions")
     }
 
-    pub fn set_version(&mut self, version: Version) {
+    /// Set the version for the entry.
+    pub fn set_version(&mut self, _version: Version) {
         todo!("set_version")
     }
 
-    pub fn set_package(&mut self, package: String) {
+    /// Set the package name for the entry.
+    pub fn set_package(&mut self, _package: String) {
         todo!("set_package")
     }
 
-    pub fn set_metadata(&mut self, key: &str, value: &str) {
+    /// Set extra metadata for the entry.
+    pub fn set_metadata(&mut self, _key: &str, _value: &str) {
         todo!("set_metadata")
     }
 
@@ -992,10 +996,12 @@ impl EntryFooter {
             .filter(|s| !s.is_empty())
     }
 
+    /// Set the maintainer for the entry.
     pub fn set_maintainer(&mut self, maintainer: (String, String)) {
         todo!("set_maintainer")
     }
 
+    /// Set email for the entry.
     pub fn set_email(&mut self, email: String) {
         todo!("set_email")
     }
@@ -1007,7 +1013,8 @@ impl EntryFooter {
             .map(|m| m.text())
     }
 
-    pub fn set_timestamp(&mut self, timestamp: String) {
+    /// Set timestamp for the entry.
+    pub fn set_timestamp(&mut self, _timestamp: String) {
         todo!("set_timestamp")
     }
 }
@@ -1737,7 +1744,7 @@ fn test_ensure_first_line() {
 
  -- 
 "#;
-    let mut cl = ChangeLog::read(text.as_bytes()).unwrap();
+    let cl = ChangeLog::read(text.as_bytes()).unwrap();
 
     let entry = cl.entries().next().unwrap();
     assert_eq!(entry.package(), Some("lintian-brush".into()));
