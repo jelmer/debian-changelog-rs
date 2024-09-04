@@ -606,10 +606,7 @@ impl EntryBuilder {
         }
         if let Some(version) = self.version.as_ref() {
             builder.token(WHITESPACE.into(), " ");
-            builder.token(
-                VERSION.into(),
-                format!("({})", version.to_string()).as_str(),
-            );
+            builder.token(VERSION.into(), format!("({})", version).as_str());
         }
         if let Some(distributions) = self.distributions.as_ref() {
             builder.token(WHITESPACE.into(), " ");
