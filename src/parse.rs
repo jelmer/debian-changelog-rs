@@ -421,12 +421,9 @@ type SyntaxToken = rowan::SyntaxToken<Lang>;
 type SyntaxElement = rowan::NodeOrToken<SyntaxNode, SyntaxToken>;
 
 impl Parse {
+    #[cfg(test)]
     fn syntax(&self) -> SyntaxNode {
         SyntaxNode::new_root(self.green_node.clone())
-    }
-
-    fn root(&self) -> ChangeLog {
-        ChangeLog::cast(self.syntax()).unwrap()
     }
 
     fn root_mut(&self) -> ChangeLog {
@@ -998,12 +995,12 @@ impl EntryFooter {
     }
 
     /// Set the maintainer for the entry.
-    pub fn set_maintainer(&mut self, maintainer: (String, String)) {
+    pub fn set_maintainer(&mut self, _maintainer: String) {
         todo!("set_maintainer")
     }
 
     /// Set email for the entry.
-    pub fn set_email(&mut self, email: String) {
+    pub fn set_email(&mut self, _email: String) {
         todo!("set_email")
     }
 
@@ -1134,9 +1131,10 @@ impl Entry {
     }
 
     pub fn set_maintainer(&mut self, maintainer: (String, String)) {
-        self.footer()
-            .unwrap_or_else(|| self.create_footer())
-            .set_maintainer(maintainer);
+        let mut footer = self.footer().unwrap_or_else(|| self.create_footer());
+
+        footer.set_maintainer(maintainer.0);
+        footer.set_email(maintainer.1);
     }
 
     /// Returns the timestamp of the entry, as the raw string.
