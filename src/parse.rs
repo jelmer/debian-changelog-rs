@@ -428,6 +428,10 @@ impl Parse {
     fn root(&self) -> ChangeLog {
         ChangeLog::cast(self.syntax()).unwrap()
     }
+
+    fn root_mut(&self) -> ChangeLog {
+        ChangeLog::cast(SyntaxNode::new_root_mut(self.green_node.clone())).unwrap()
+    }
 }
 
 macro_rules! ast_node {
@@ -594,7 +598,7 @@ impl EntryBuilder {
             builder.start_node(EMPTY_LINE.into());
             builder.token(NEWLINE.into(), "\n");
             builder.finish_node();
-            let syntax = SyntaxNode::new_root(builder.finish()).clone_for_update();
+            let syntax = SyntaxNode::new_root_mut(builder.finish());
             self.root.splice_children(0..0, vec![syntax.into()]);
         }
 
@@ -694,7 +698,7 @@ impl EntryBuilder {
         builder.finish_node(); // ENTRY_FOOTER
 
         builder.finish_node(); // ENTRY
-        let syntax = SyntaxNode::new_root(builder.finish()).clone_for_update();
+        let syntax = SyntaxNode::new_root_mut(builder.finish());
         self.root.splice_children(0..0, vec![syntax.clone().into()]);
         Entry(syntax)
     }
@@ -707,8 +711,8 @@ impl ChangeLog {
         builder.start_node(ROOT.into());
         builder.finish_node();
 
-        let syntax = SyntaxNode::new_root(builder.finish());
-        ChangeLog(syntax.clone_for_update())
+        let syntax = SyntaxNode::new_root_mut(builder.finish());
+        ChangeLog(syntax)
     }
 
     /// Returns an iterator over all entries in the watch file.
@@ -843,7 +847,7 @@ impl ChangeLog {
         r.read_to_string(&mut buf)?;
 
         let parsed = parse(&buf);
-        Ok(parsed.root().clone_for_update())
+        Ok(parsed.root_mut())
     }
 
     pub fn write<W: std::io::Write>(&self, mut w: W) -> Result<(), Error> {
@@ -871,7 +875,7 @@ impl FromStr for ChangeLog {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parsed = parse(s);
         if parsed.errors.is_empty() {
-            Ok(parsed.root().clone_for_update())
+            Ok(parsed.root_mut())
         } else {
             Err(ParseError(parsed.errors))
         }
@@ -1240,7 +1244,7 @@ impl Entry {
 
         let index = previous_line.map_or(0, |l| l.index() + 1);
 
-        let syntax = SyntaxNode::new_root(builder.finish()).clone_for_update();
+        let syntax = SyntaxNode::new_root_mut(builder.finish());
 
         self.0.splice_children(index..index, vec![syntax.into()]);
     }
@@ -1284,9 +1288,7 @@ impl Entry {
             .last()
             .unwrap_or_else(|| self.0.children().next().unwrap());
 
-        let syntax = SyntaxNode::new_root(builder.finish())
-            .clone_for_update()
-            .into();
+        let syntax = SyntaxNode::new_root_mut(builder.finish()).into();
         self.0
             .splice_children(last_child.index() + 1..last_child.index() + 1, vec![syntax]);
     }
@@ -1486,7 +1488,7 @@ breezy (3.3.3-2) unstable; urgency=medium
 "###
     );
 
-    let mut root = parsed.root().clone_for_update();
+    let mut root = parsed.root_mut();
     let entries: Vec<_> = root.entries().collect();
     assert_eq!(entries.len(), 2);
     let entry = &entries[0];
