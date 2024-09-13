@@ -103,7 +103,7 @@ impl rowan::Language for Lang {
 
 /// GreenNode is an immutable tree, which is cheap to change,
 /// but doesn't contain offsets and parent pointers.
-use rowan::GreenNode;
+use rowan::{GreenNode, GreenToken};
 
 /// You can construct GreenNodes by hand, but a builder
 /// is helpful for top-down parsers: it maintains a stack
@@ -155,10 +155,10 @@ fn parse(text: &str) -> Parse {
 
             self.expect(VERSION);
 
+            self.skip_ws();
+
             self.builder.start_node(DISTRIBUTIONS.into());
             loop {
-                self.skip_ws();
-
                 match self.current() {
                     Some(IDENTIFIER) => self.bump(),
                     Some(NEWLINE) => {
@@ -175,8 +175,11 @@ fn parse(text: &str) -> Parse {
                         break;
                     }
                 }
+                self.skip_ws();
             }
             self.builder.finish_node();
+
+            self.skip_ws();
 
             self.builder.start_node(METADATA.into());
             if self.current() == Some(SEMICOLON) {
@@ -489,6 +492,27 @@ impl MetadataEntry {
             .children()
             .find_map(MetadataValue::cast)
             .map(|k| k.to_string())
+    }
+
+    pub fn set_value(&mut self, value: &str) {
+        let node = self
+            .0
+            .children_with_tokens()
+            .find(|it| it.kind() == METADATA_VALUE);
+        let mut builder = GreenNodeBuilder::new();
+        builder.start_node(METADATA_VALUE.into());
+        builder.token(IDENTIFIER.into(), value);
+        builder.finish_node();
+        let root = SyntaxNode::new_root_mut(builder.finish());
+
+        let range = if let Some(node) = node {
+            node.index()..node.index() + 1
+        } else {
+            let count = self.0.children().count();
+            count..count
+        };
+
+        self.0.splice_children(range, vec![root.into()]);
     }
 }
 
@@ -812,7 +836,7 @@ impl ChangeLog {
         let mut it = self.entries();
         if let Some(entry) = it.next() {
             // Drop trailing newlines
-            while let Some(sibling) = entry.syntax().next_sibling() {
+            while let Some(sibling) = entry.0.next_sibling() {
                 if sibling.kind() == EMPTY_LINE {
                     sibling.detach();
                 } else {
@@ -879,6 +903,22 @@ impl FromStr for ChangeLog {
     }
 }
 
+impl FromStr for Entry {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let cl: ChangeLog = s.parse()?;
+        let mut entries = cl.entries();
+        let entry = entries
+            .next()
+            .ok_or_else(|| ParseError(vec!["no entries found".to_string()]))?;
+        if entries.next().is_some() {
+            return Err(ParseError(vec!["multiple entries found".to_string()]));
+        }
+        Ok(entry)
+    }
+}
+
 impl EntryHeader {
     /// Returns the version of the entry.
     pub fn version(&self) -> Option<Version> {
@@ -891,6 +931,12 @@ impl EntryHeader {
             }
             None
         })
+    }
+
+    fn replace_root(&mut self, new_root: SyntaxNode) {
+        let parent = self.0.parent().unwrap();
+        parent.splice_children(self.0.index()..self.0.index() + 1, vec![new_root.into()]);
+        self.0 = parent.children().nth(self.0.index()).unwrap();
     }
 
     /// Returns the package name of the entry.
@@ -925,25 +971,200 @@ impl EntryHeader {
 
     /// Set distributions for the entry.
     pub fn set_distributions(&mut self, _distributions: Vec<String>) {
-        todo!("set_distributions")
+        let node = self
+            .0
+            .children_with_tokens()
+            .find(|it| it.kind() == DISTRIBUTIONS);
+        let mut builder = GreenNodeBuilder::new();
+        builder.start_node(DISTRIBUTIONS.into());
+        for (i, distribution) in _distributions.iter().enumerate() {
+            if i > 0 {
+                builder.token(WHITESPACE.into(), " ");
+            }
+            builder.token(IDENTIFIER.into(), distribution);
+        }
+        builder.finish_node();
+
+        let (range, green) = if let Some(node) = node {
+            (
+                node.index()..node.index() + 1,
+                vec![builder.finish().into()],
+            )
+        } else if let Some(version) = self
+            .0
+            .children_with_tokens()
+            .find(|it| it.kind() == VERSION)
+        {
+            (
+                version.index()..version.index() + 1,
+                vec![
+                    GreenToken::new(WHITESPACE.into(), " ").into(),
+                    builder.finish().into(),
+                ],
+            )
+        } else if let Some(metadata) = self
+            .0
+            .children_with_tokens()
+            .find(|it| it.kind() == METADATA)
+        {
+            (
+                metadata.index() - 1..metadata.index() - 1,
+                vec![
+                    GreenToken::new(WHITESPACE.into(), " ").into(),
+                    builder.finish().into(),
+                ],
+            )
+        } else {
+            (
+                self.0.children().count()..self.0.children().count(),
+                vec![
+                    GreenToken::new(WHITESPACE.into(), " ").into(),
+                    builder.finish().into(),
+                ],
+            )
+        };
+
+        let new_root = SyntaxNode::new_root_mut(self.0.green().splice_children(range, green));
+        self.replace_root(new_root);
     }
 
     /// Set the version for the entry.
-    pub fn set_version(&mut self, _version: Version) {
-        todo!("set_version")
+    pub fn set_version(&mut self, version: &Version) {
+        // Find the version token
+        let node = self
+            .0
+            .children_with_tokens()
+            .find(|it| it.kind() == VERSION);
+        let (range, green) = if let Some(token) = node {
+            (
+                token.index()..token.index() + 1,
+                vec![GreenToken::new(VERSION.into(), &format!("({})", version)).into()],
+            )
+        } else {
+            let index = self
+                .0
+                .children_with_tokens()
+                .position(|it| it.kind() == IDENTIFIER)
+                .unwrap_or(0);
+            (
+                index + 1..index + 1,
+                vec![
+                    GreenToken::new(WHITESPACE.into(), " ").into(),
+                    GreenToken::new(VERSION.into(), &format!("({})", version)).into(),
+                ],
+            )
+        };
+        let new_root = SyntaxNode::new_root_mut(self.0.green().splice_children(range, green));
+
+        self.replace_root(new_root);
     }
 
     /// Set the package name for the entry.
-    pub fn set_package(&mut self, _package: String) {
-        todo!("set_package")
+    pub fn set_package(&mut self, package: String) {
+        let node = self
+            .0
+            .children_with_tokens()
+            .find(|it| it.kind() == IDENTIFIER);
+
+        let new_root = if let Some(token) = node {
+            SyntaxNode::new_root_mut(self.0.green().splice_children(
+                token.index()..token.index() + 1,
+                vec![GreenToken::new(IDENTIFIER.into(), &package).into()],
+            ))
+        } else {
+            SyntaxNode::new_root_mut(self.0.green().splice_children(
+                0..0,
+                vec![
+                    GreenToken::new(IDENTIFIER.into(), &package).into(),
+                    GreenToken::new(WHITESPACE.into(), " ").into(),
+                ],
+            ))
+        };
+
+        self.replace_root(new_root);
     }
 
     /// Set extra metadata for the entry.
-    pub fn set_metadata(&mut self, _key: &str, _value: &str) {
-        todo!("set_metadata")
+    pub fn set_metadata(&mut self, key: &str, value: &str) {
+        // Find the appropriate metadata node
+        if let Some(mut node) = self
+            .metadata_nodes()
+            .find(|it| it.key().map(|k| k == key).unwrap_or(false))
+        {
+            node.set_value(value);
+        } else if let Some(metadata) = self
+            .0
+            .children_with_tokens()
+            .find(|it| it.kind() == METADATA)
+        {
+            let mut builder = GreenNodeBuilder::new();
+            builder.start_node(METADATA_ENTRY.into());
+            builder.start_node(METADATA_KEY.into());
+            builder.token(IDENTIFIER.into(), key);
+            builder.finish_node();
+            builder.token(EQUALS.into(), "=");
+            builder.start_node(METADATA_VALUE.into());
+            builder.token(IDENTIFIER.into(), value);
+            builder.finish_node();
+            builder.finish_node();
+
+            let metadata = metadata.as_node().unwrap();
+
+            let count = metadata.children_with_tokens().count();
+            self.0.splice_children(
+                metadata.index()..metadata.index() + 1,
+                vec![SyntaxNode::new_root_mut(metadata.green().splice_children(
+                    count..count,
+                    vec![
+                        GreenToken::new(WHITESPACE.into(), " ").into(),
+                        builder.finish().into(),
+                    ],
+                ))
+                .into()],
+            );
+        } else {
+            let mut builder = GreenNodeBuilder::new();
+            builder.start_node(METADATA.into());
+            builder.token(SEMICOLON.into(), ";");
+            builder.token(WHITESPACE.into(), " ");
+            builder.start_node(METADATA_ENTRY.into());
+            builder.start_node(METADATA_KEY.into());
+            builder.token(IDENTIFIER.into(), key);
+            builder.finish_node();
+            builder.token(EQUALS.into(), "=");
+            builder.start_node(METADATA_VALUE.into());
+            builder.token(IDENTIFIER.into(), value);
+            builder.finish_node();
+            builder.finish_node();
+
+            let new_root = SyntaxNode::new_root_mut(builder.finish());
+
+            // Add either just after DISTRIBUTIONS
+            if let Some(distributions) = self
+                .0
+                .children_with_tokens()
+                .find(|it| it.kind() == DISTRIBUTIONS)
+            {
+                self.0.splice_children(
+                    distributions.index() + 1..distributions.index() + 1,
+                    vec![new_root.into()],
+                );
+            } else if let Some(nl) = self
+                .0
+                .children_with_tokens()
+                .find(|it| it.kind() == NEWLINE)
+            {
+                // Just before the newline
+                self.0
+                    .splice_children(nl.index()..nl.index(), vec![new_root.into()]);
+            } else {
+                let count = self.0.children_with_tokens().count();
+                self.0.splice_children(count..count, vec![new_root.into()]);
+            }
+        }
     }
 
-    fn metadata_node(&self) -> impl Iterator<Item = MetadataEntry> + '_ {
+    fn metadata_nodes(&self) -> impl Iterator<Item = MetadataEntry> + '_ {
         let node = self.0.children().find(|it| it.kind() == METADATA);
 
         node.into_iter().flat_map(|node| {
@@ -953,7 +1174,7 @@ impl EntryHeader {
     }
 
     pub fn metadata(&self) -> impl Iterator<Item = (String, String)> + '_ {
-        self.metadata_node().filter_map(|entry| {
+        self.metadata_nodes().filter_map(|entry| {
             if let (Some(key), Some(value)) = (entry.key(), entry.value()) {
                 Some((key, value))
             } else {
@@ -994,14 +1215,80 @@ impl EntryFooter {
             .filter(|s| !s.is_empty())
     }
 
+    fn replace_root(&mut self, new_root: SyntaxNode) {
+        let parent = self.0.parent().unwrap();
+        parent.splice_children(self.0.index()..self.0.index() + 1, vec![new_root.into()]);
+        self.0 = parent.children().nth(self.0.index()).unwrap();
+    }
+
     /// Set the maintainer for the entry.
-    pub fn set_maintainer(&mut self, _maintainer: String) {
-        todo!("set_maintainer")
+    pub fn set_maintainer(&mut self, maintainer: String) {
+        let node = self
+            .0
+            .children_with_tokens()
+            .find(|it| it.kind() == MAINTAINER);
+        let new_root = if let Some(node) = node {
+            SyntaxNode::new_root_mut(self.0.green().splice_children(
+                node.index()..node.index() + 1,
+                vec![GreenToken::new(MAINTAINER.into(), &maintainer).into()],
+            ))
+        } else if let Some(node) = self.0.children_with_tokens().find(|it| it.kind() == INDENT) {
+            SyntaxNode::new_root_mut(self.0.green().splice_children(
+                node.index() + 1..node.index() + 1,
+                vec![GreenToken::new(MAINTAINER.into(), &maintainer).into()],
+            ))
+        } else {
+            SyntaxNode::new_root_mut(self.0.green().splice_children(
+                0..0,
+                vec![
+                    GreenToken::new(INDENT.into(), " -- ").into(),
+                    GreenToken::new(MAINTAINER.into(), &maintainer).into(),
+                ],
+            ))
+        };
+
+        self.replace_root(new_root);
     }
 
     /// Set email for the entry.
     pub fn set_email(&mut self, _email: String) {
-        todo!("set_email")
+        let node = self.0.children_with_tokens().find(|it| it.kind() == EMAIL);
+        let new_root = if let Some(node) = node {
+            SyntaxNode::new_root_mut(self.0.green().splice_children(
+                node.index()..node.index() + 1,
+                vec![GreenToken::new(EMAIL.into(), &format!("<{}>", _email)).into()],
+            ))
+        } else if let Some(node) = self
+            .0
+            .children_with_tokens()
+            .find(|it| it.kind() == MAINTAINER)
+        {
+            SyntaxNode::new_root_mut(self.0.green().splice_children(
+                node.index() + 1..node.index() + 1,
+                vec![GreenToken::new(EMAIL.into(), &format!("<{}>", _email)).into()],
+            ))
+        } else if let Some(node) = self.0.children_with_tokens().find(|it| it.kind() == INDENT) {
+            SyntaxNode::new_root_mut(self.0.green().splice_children(
+                node.index() + 1..node.index() + 1,
+                vec![
+                    GreenToken::new(MAINTAINER.into(), "").into(),
+                    GreenToken::new(WHITESPACE.into(), " ").into(),
+                    GreenToken::new(EMAIL.into(), &format!("<{}>", _email)).into(),
+                ],
+            ))
+        } else {
+            SyntaxNode::new_root_mut(self.0.green().splice_children(
+                0..0,
+                vec![
+                    GreenToken::new(INDENT.into(), " -- ").into(),
+                    GreenToken::new(MAINTAINER.into(), "").into(),
+                    GreenToken::new(WHITESPACE.into(), " ").into(),
+                    GreenToken::new(EMAIL.into(), &format!("<{}>", _email)).into(),
+                ],
+            ))
+        };
+
+        self.replace_root(new_root);
     }
 
     pub fn timestamp(&self) -> Option<String> {
@@ -1012,8 +1299,37 @@ impl EntryFooter {
     }
 
     /// Set timestamp for the entry.
-    pub fn set_timestamp(&mut self, _timestamp: String) {
-        todo!("set_timestamp")
+    pub fn set_timestamp(&mut self, timestamp: String) {
+        let node = self
+            .0
+            .children_with_tokens()
+            .find(|it| it.kind() == TIMESTAMP);
+        let new_root = if let Some(node) = node {
+            SyntaxNode::new_root_mut(self.0.green().splice_children(
+                node.index()..node.index() + 1,
+                vec![GreenToken::new(TIMESTAMP.into(), &timestamp).into()],
+            ))
+        } else if let Some(node) = self.0.children_with_tokens().find(|it| it.kind() == INDENT) {
+            SyntaxNode::new_root_mut(self.0.green().splice_children(
+                node.index() + 1..node.index() + 1,
+                vec![GreenToken::new(TIMESTAMP.into(), &timestamp).into()],
+            ))
+        } else if let Some(node) = self.0.children_with_tokens().find(|it| it.kind() == EMAIL) {
+            SyntaxNode::new_root_mut(self.0.green().splice_children(
+                node.index() + 1..node.index() + 1,
+                vec![GreenToken::new(TIMESTAMP.into(), &timestamp).into()],
+            ))
+        } else {
+            SyntaxNode::new_root_mut(self.0.green().splice_children(
+                0..0,
+                vec![
+                    GreenToken::new(INDENT.into(), " -- ").into(),
+                    GreenToken::new(TIMESTAMP.into(), &timestamp).into(),
+                ],
+            ))
+        };
+
+        self.replace_root(new_root);
     }
 }
 
@@ -1103,7 +1419,7 @@ impl Entry {
         self.header().and_then(|h| h.version())
     }
 
-    pub fn set_version(&mut self, version: Version) {
+    pub fn set_version(&mut self, version: &Version) {
         self.header()
             .unwrap_or_else(|| self.create_header())
             .set_version(version);
@@ -1163,11 +1479,24 @@ impl Entry {
     }
 
     fn create_header(&self) -> EntryHeader {
-        todo!("create_header")
+        let mut builder = GreenNodeBuilder::new();
+        builder.start_node(ENTRY_HEADER.into());
+        builder.token(NEWLINE.into(), "\n");
+        builder.finish_node();
+        let syntax = SyntaxNode::new_root_mut(builder.finish());
+        self.0.splice_children(0..0, vec![syntax.into()]);
+        EntryHeader(self.0.children().next().unwrap().clone_for_update())
     }
 
     fn create_footer(&self) -> EntryFooter {
-        todo!("create_footer")
+        let mut builder = GreenNodeBuilder::new();
+        builder.start_node(ENTRY_FOOTER.into());
+        builder.token(NEWLINE.into(), "\n");
+        builder.finish_node();
+        let syntax = SyntaxNode::new_root_mut(builder.finish());
+        let count = self.0.children().count();
+        self.0.splice_children(count..count, vec![syntax.into()]);
+        EntryFooter(self.0.children().last().unwrap().clone_for_update())
     }
 
     pub fn set_urgency(&mut self, urgency: Urgency) {
@@ -1355,9 +1684,13 @@ fn parse_time_string(time_str: &str) -> Result<DateTime<FixedOffset>, chrono::Pa
     DateTime::parse_from_str(time_str, CHANGELOG_TIME_FORMAT)
 }
 
-#[test]
-fn test_parse_simple() {
-    const CHANGELOG: &str = r#"breezy (3.3.4-1) unstable; urgency=low
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_simple() {
+        const CHANGELOG: &str = r#"breezy (3.3.4-1) unstable; urgency=low
 
   * New upstream release.
 
@@ -1372,19 +1705,19 @@ breezy (3.3.3-2) unstable; urgency=medium
 
 # Oh, and here is a comment
 "#;
-    let parsed = parse(CHANGELOG);
-    assert_eq!(parsed.errors, Vec::<String>::new());
-    let node = parsed.syntax();
-    assert_eq!(
-        format!("{:#?}", node),
-        r###"ROOT@0..405
+        let parsed = parse(CHANGELOG);
+        assert_eq!(parsed.errors, Vec::<String>::new());
+        let node = parsed.syntax();
+        assert_eq!(
+            format!("{:#?}", node),
+            r###"ROOT@0..405
   ENTRY@0..140
     ENTRY_HEADER@0..39
       IDENTIFIER@0..6 "breezy"
       WHITESPACE@6..7 " "
       VERSION@7..16 "(3.3.4-1)"
-      DISTRIBUTIONS@16..25
-        WHITESPACE@16..17 " "
+      WHITESPACE@16..17 " "
+      DISTRIBUTIONS@17..25
         IDENTIFIER@17..25 "unstable"
       METADATA@25..38
         SEMICOLON@25..26 ";"
@@ -1433,8 +1766,8 @@ breezy (3.3.3-2) unstable; urgency=medium
       IDENTIFIER@141..147 "breezy"
       WHITESPACE@147..148 " "
       VERSION@148..157 "(3.3.3-2)"
-      DISTRIBUTIONS@157..166
-        WHITESPACE@157..158 " "
+      WHITESPACE@157..158 " "
+      DISTRIBUTIONS@158..166
         IDENTIFIER@158..166 "unstable"
       METADATA@166..182
         SEMICOLON@166..167 ";"
@@ -1484,36 +1817,36 @@ breezy (3.3.3-2) unstable; urgency=medium
     NEWLINE@376..377 "\n"
   COMMENT@377..405 "# Oh, and here is a c ..."
 "###
-    );
+        );
 
-    let mut root = parsed.root_mut();
-    let entries: Vec<_> = root.entries().collect();
-    assert_eq!(entries.len(), 2);
-    let entry = &entries[0];
-    assert_eq!(entry.package(), Some("breezy".into()));
-    assert_eq!(entry.version(), Some("3.3.4-1".parse().unwrap()));
-    assert_eq!(entry.distributions(), Some(vec!["unstable".into()]));
-    assert_eq!(entry.urgency(), Some(Urgency::Low));
-    assert_eq!(entry.maintainer(), Some("Jelmer Vernooĳ".into()));
-    assert_eq!(entry.email(), Some("jelmer@debian.org".into()));
-    assert_eq!(
-        entry.timestamp(),
-        Some("Mon, 04 Sep 2023 18:13:45 -0500".into())
-    );
-    assert_eq!(
-        entry.datetime(),
-        Some("2023-09-04T18:13:45-05:00".parse().unwrap())
-    );
-    let changes_lines: Vec<_> = entry.change_lines().collect();
-    assert_eq!(changes_lines, vec!["* New upstream release.".to_string()]);
+        let mut root = parsed.root_mut();
+        let entries: Vec<_> = root.entries().collect();
+        assert_eq!(entries.len(), 2);
+        let entry = &entries[0];
+        assert_eq!(entry.package(), Some("breezy".into()));
+        assert_eq!(entry.version(), Some("3.3.4-1".parse().unwrap()));
+        assert_eq!(entry.distributions(), Some(vec!["unstable".into()]));
+        assert_eq!(entry.urgency(), Some(Urgency::Low));
+        assert_eq!(entry.maintainer(), Some("Jelmer Vernooĳ".into()));
+        assert_eq!(entry.email(), Some("jelmer@debian.org".into()));
+        assert_eq!(
+            entry.timestamp(),
+            Some("Mon, 04 Sep 2023 18:13:45 -0500".into())
+        );
+        assert_eq!(
+            entry.datetime(),
+            Some("2023-09-04T18:13:45-05:00".parse().unwrap())
+        );
+        let changes_lines: Vec<_> = entry.change_lines().collect();
+        assert_eq!(changes_lines, vec!["* New upstream release.".to_string()]);
 
-    assert_eq!(node.text(), CHANGELOG);
+        assert_eq!(node.text(), CHANGELOG);
 
-    let first = root.pop_first().unwrap();
-    assert_eq!(first.version(), Some("3.3.4-1".parse().unwrap()));
-    assert_eq!(
-        root.to_string(),
-        r#"breezy (3.3.3-2) unstable; urgency=medium
+        let first = root.pop_first().unwrap();
+        assert_eq!(first.version(), Some("3.3.4-1".parse().unwrap()));
+        assert_eq!(
+            root.to_string(),
+            r#"breezy (3.3.3-2) unstable; urgency=medium
 
   * Drop unnecessary dependency on python3-six. Closes: #1039011
   * Drop dependency on cython3-dbg. Closes: #1040544
@@ -1522,91 +1855,91 @@ breezy (3.3.3-2) unstable; urgency=medium
 
 # Oh, and here is a comment
 "#
-    );
-}
+        );
+    }
 
-#[test]
-fn test_from_io_read() {
-    let changelog = r#"breezy (3.3.4-1) unstable; urgency=low
+    #[test]
+    fn test_from_io_read() {
+        let changelog = r#"breezy (3.3.4-1) unstable; urgency=low
 
   * New upstream release.
 
  -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
 "#;
 
-    let input = changelog.as_bytes();
-    let input = Box::new(std::io::Cursor::new(input)) as Box<dyn std::io::Read>;
-    let parsed = ChangeLog::read(input).unwrap();
-    assert_eq!(parsed.to_string(), changelog);
-}
+        let input = changelog.as_bytes();
+        let input = Box::new(std::io::Cursor::new(input)) as Box<dyn std::io::Read>;
+        let parsed = ChangeLog::read(input).unwrap();
+        assert_eq!(parsed.to_string(), changelog);
+    }
 
-#[test]
-fn test_new_entry() {
-    let mut cl = ChangeLog::new();
-    cl.new_entry()
-        .package("breezy".into())
-        .version("3.3.4-1".parse().unwrap())
-        .distributions(vec!["unstable".into()])
-        .urgency(Urgency::Low)
-        .maintainer(("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()))
-        .change_line("* A change.".into())
-        .datetime("2023-09-04T18:13:45-05:00".parse().unwrap())
-        .finish();
-    assert_eq!(
-        r###"breezy (3.3.4-1) unstable; urgency=low
-
-  * A change.
-
- -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
-"###,
-        cl.to_string()
-    );
-
-    assert!(!cl.entries().next().unwrap().is_unreleased().unwrap());
-}
-
-#[test]
-fn test_new_empty_default() {
-    let mut cl = ChangeLog::new();
-    cl.new_entry()
-        .package("breezy".into())
-        .version("3.3.4-1".parse().unwrap())
-        .maintainer(("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()))
-        .change_line("* A change.".into())
-        .datetime("2023-09-04T18:13:45-05:00".parse().unwrap())
-        .finish();
-    assert_eq!(
-        r###"breezy (3.3.4-1) UNRELEASED; urgency=low
+    #[test]
+    fn test_new_entry() {
+        let mut cl = ChangeLog::new();
+        cl.new_entry()
+            .package("breezy".into())
+            .version("3.3.4-1".parse().unwrap())
+            .distributions(vec!["unstable".into()])
+            .urgency(Urgency::Low)
+            .maintainer(("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()))
+            .change_line("* A change.".into())
+            .datetime("2023-09-04T18:13:45-05:00".parse().unwrap())
+            .finish();
+        assert_eq!(
+            r###"breezy (3.3.4-1) unstable; urgency=low
 
   * A change.
 
  -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
 "###,
-        cl.to_string()
-    );
-}
+            cl.to_string()
+        );
 
-#[test]
-fn test_new_empty_entry() {
-    let mut cl = ChangeLog::new();
-    cl.new_empty_entry()
-        .change_line("* A change.".into())
-        .finish();
-    assert_eq!(
-        r###"
+        assert!(!cl.entries().next().unwrap().is_unreleased().unwrap());
+    }
+
+    #[test]
+    fn test_new_empty_default() {
+        let mut cl = ChangeLog::new();
+        cl.new_entry()
+            .package("breezy".into())
+            .version("3.3.4-1".parse().unwrap())
+            .maintainer(("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()))
+            .change_line("* A change.".into())
+            .datetime("2023-09-04T18:13:45-05:00".parse().unwrap())
+            .finish();
+        assert_eq!(
+            r###"breezy (3.3.4-1) UNRELEASED; urgency=low
+
+  * A change.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"###,
+            cl.to_string()
+        );
+    }
+
+    #[test]
+    fn test_new_empty_entry() {
+        let mut cl = ChangeLog::new();
+        cl.new_empty_entry()
+            .change_line("* A change.".into())
+            .finish();
+        assert_eq!(
+            r###"
 
   * A change.
 
  -- 
 "###,
-        cl.to_string()
-    );
-    assert_eq!(cl.entries().next().unwrap().is_unreleased(), Some(true));
-}
+            cl.to_string()
+        );
+        assert_eq!(cl.entries().next().unwrap().is_unreleased(), Some(true));
+    }
 
-#[test]
-fn test_parse_invalid_line() {
-    let text = r#"THIS IS NOT A PARSEABLE LINE
+    #[test]
+    fn test_parse_invalid_line() {
+        let text = r#"THIS IS NOT A PARSEABLE LINE
 lintian-brush (0.35) UNRELEASED; urgency=medium
 
   * Support updating templated debian/control files that use cdbs
@@ -1614,81 +1947,124 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
 
  -- Joe Example <joe@example.com>  Fri, 04 Oct 2019 02:36:13 +0000
 "#;
-    let cl = ChangeLog::read_relaxed(text.as_bytes()).unwrap();
-    let entry = cl.entries().nth(1).unwrap();
-    assert_eq!(entry.package(), Some("lintian-brush".into()));
-    assert_eq!(entry.version(), Some("0.35".parse().unwrap()));
-    assert_eq!(entry.urgency(), Some(Urgency::Medium));
-    assert_eq!(entry.maintainer(), Some("Joe Example".into()));
-    assert_eq!(entry.email(), Some("joe@example.com".into()));
-    assert_eq!(entry.distributions(), Some(vec!["UNRELEASED".into()]));
-    assert_eq!(
-        entry.datetime(),
-        Some("2019-10-04T02:36:13+00:00".parse().unwrap())
-    );
-}
-
-#[cfg(test)]
-mod entry_manipulate_tests {
-    use super::*;
-
-    #[test]
-    fn test_append_change_line() {
-        let mut cl = ChangeLog::new();
-
-        let entry = cl
-            .new_empty_entry()
-            .change_line("* A change.".into())
-            .finish();
-
-        entry.append_change_line("* Another change.");
-
+        let cl = ChangeLog::read_relaxed(text.as_bytes()).unwrap();
+        let entry = cl.entries().nth(1).unwrap();
+        assert_eq!(entry.package(), Some("lintian-brush".into()));
+        assert_eq!(entry.version(), Some("0.35".parse().unwrap()));
+        assert_eq!(entry.urgency(), Some(Urgency::Medium));
+        assert_eq!(entry.maintainer(), Some("Joe Example".into()));
+        assert_eq!(entry.email(), Some("joe@example.com".into()));
+        assert_eq!(entry.distributions(), Some(vec!["UNRELEASED".into()]));
         assert_eq!(
-            r###"
+            entry.datetime(),
+            Some("2019-10-04T02:36:13+00:00".parse().unwrap())
+        );
+    }
+
+    #[cfg(test)]
+    mod entry_manipulate_tests {
+        use super::*;
+
+        #[test]
+        fn test_append_change_line() {
+            let mut cl = ChangeLog::new();
+
+            let entry = cl
+                .new_empty_entry()
+                .change_line("* A change.".into())
+                .finish();
+
+            entry.append_change_line("* Another change.");
+
+            assert_eq!(
+                r###"
 
   * A change.
   * Another change.
 
  -- 
 "###,
-            cl.to_string()
-        );
-    }
+                cl.to_string()
+            );
+        }
 
-    #[test]
-    fn test_prepend_change_line() {
-        let mut cl = ChangeLog::new();
+        #[test]
+        fn test_prepend_change_line() {
+            let mut cl = ChangeLog::new();
 
-        let entry = cl
-            .new_empty_entry()
-            .change_line("* A change.".into())
-            .finish();
+            let entry = cl
+                .new_empty_entry()
+                .change_line("* A change.".into())
+                .finish();
 
-        entry.prepend_change_line("* Another change.");
+            entry.prepend_change_line("* Another change.");
 
-        assert_eq!(
-            r###"
+            assert_eq!(
+                r###"
 
   * Another change.
   * A change.
 
  -- 
 "###,
-            cl.to_string()
-        );
+                cl.to_string()
+            );
 
-        assert_eq!(entry.maintainer(), None);
-        assert_eq!(entry.email(), None);
-        assert_eq!(entry.timestamp(), None);
-        assert_eq!(entry.package(), None);
-        assert_eq!(entry.version(), None);
+            assert_eq!(entry.maintainer(), None);
+            assert_eq!(entry.email(), None);
+            assert_eq!(entry.timestamp(), None);
+            assert_eq!(entry.package(), None);
+            assert_eq!(entry.version(), None);
+        }
     }
-}
 
-#[cfg(test)]
-mod auto_add_change_tests {
+    #[cfg(test)]
+    mod auto_add_change_tests {
+        #[test]
+        fn test_unreleased_existing() {
+            let text = r#"lintian-brush (0.35) unstable; urgency=medium
+
+  * This line already existed.
+
+  [ Jane Example ]
+  * And this one has an existing author.
+
+ -- 
+"#;
+            let mut cl = super::ChangeLog::read(text.as_bytes()).unwrap();
+
+            let entry = cl.entries().next().unwrap();
+            assert_eq!(entry.package(), Some("lintian-brush".into()));
+            assert_eq!(entry.is_unreleased(), Some(true));
+
+            let entry = cl.auto_add_change(
+                &["* And this one is new."],
+                ("Joe Example".to_string(), "joe@example.com".to_string()),
+                None,
+                None,
+            );
+
+            assert_eq!(cl.entries().count(), 1);
+
+            assert_eq!(entry.package(), Some("lintian-brush".into()));
+            assert_eq!(entry.is_unreleased(), Some(true));
+            assert_eq!(
+                entry.change_lines().collect::<Vec<_>>(),
+                &[
+                    "* This line already existed.",
+                    "",
+                    "[ Jane Example ]",
+                    "* And this one has an existing author.",
+                    "",
+                    "[ Joe Example ]",
+                    "* And this one is new.",
+                ]
+            );
+        }
+    }
+
     #[test]
-    fn test_unreleased_existing() {
+    fn test_ensure_first_line() {
         let text = r#"lintian-brush (0.35) unstable; urgency=medium
 
   * This line already existed.
@@ -1698,59 +2074,16 @@ mod auto_add_change_tests {
 
  -- 
 "#;
-        let mut cl = super::ChangeLog::read(text.as_bytes()).unwrap();
+        let cl = ChangeLog::read(text.as_bytes()).unwrap();
 
         let entry = cl.entries().next().unwrap();
         assert_eq!(entry.package(), Some("lintian-brush".into()));
-        assert_eq!(entry.is_unreleased(), Some(true));
 
-        let entry = cl.auto_add_change(
-            &["* And this one is new."],
-            ("Joe Example".to_string(), "joe@example.com".to_string()),
-            None,
-            None,
-        );
+        entry.ensure_first_line("* QA upload.");
+        entry.ensure_first_line("* QA upload.");
 
-        assert_eq!(cl.entries().count(), 1);
-
-        assert_eq!(entry.package(), Some("lintian-brush".into()));
-        assert_eq!(entry.is_unreleased(), Some(true));
         assert_eq!(
-            entry.change_lines().collect::<Vec<_>>(),
-            &[
-                "* This line already existed.",
-                "",
-                "[ Jane Example ]",
-                "* And this one has an existing author.",
-                "",
-                "[ Joe Example ]",
-                "* And this one is new.",
-            ]
-        );
-    }
-}
-
-#[test]
-fn test_ensure_first_line() {
-    let text = r#"lintian-brush (0.35) unstable; urgency=medium
-
-  * This line already existed.
-
-  [ Jane Example ]
-  * And this one has an existing author.
-
- -- 
-"#;
-    let cl = ChangeLog::read(text.as_bytes()).unwrap();
-
-    let entry = cl.entries().next().unwrap();
-    assert_eq!(entry.package(), Some("lintian-brush".into()));
-
-    entry.ensure_first_line("* QA upload.");
-    entry.ensure_first_line("* QA upload.");
-
-    assert_eq!(
-        r#"lintian-brush (0.35) unstable; urgency=medium
+            r#"lintian-brush (0.35) unstable; urgency=medium
 
   * QA upload.
   * This line already existed.
@@ -1760,6 +2093,219 @@ fn test_ensure_first_line() {
 
  -- 
 "#,
-        cl.to_string()
-    );
+            cl.to_string()
+        );
+    }
+
+    #[test]
+    fn test_set_version() {
+        let mut entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        entry.set_version(&"3.3.5-1".parse().unwrap());
+
+        assert_eq!(
+            r#"breezy (3.3.5-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#,
+            entry.to_string()
+        );
+    }
+
+    #[test]
+    fn test_set_package() {
+        let mut entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        entry.set_package("bzr".into());
+
+        assert_eq!(
+            r#"bzr (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#,
+            entry.to_string()
+        );
+    }
+
+    #[test]
+    fn test_set_distributions() {
+        let mut entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        entry.set_distributions(vec!["unstable".into(), "experimental".into()]);
+
+        assert_eq!(
+            r#"breezy (3.3.4-1) unstable experimental; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#,
+            entry.to_string()
+        );
+    }
+
+    #[test]
+    fn test_set_maintainer() {
+        let mut entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        entry.set_maintainer(("Joe Example".into(), "joe@example.com".into()));
+
+        assert_eq!(
+            r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Joe Example <joe@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#,
+            entry.to_string()
+        );
+    }
+
+    #[test]
+    fn test_set_timestamp() {
+        let mut entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        entry.set_timestamp("Mon, 04 Sep 2023 18:13:46 -0500".into());
+
+        assert_eq!(
+            r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:46 -0500
+"#,
+            entry.to_string()
+        );
+    }
+
+    #[test]
+    fn test_set_datetime() {
+        let mut entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <joe@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        entry.set_datetime("2023-09-04T18:13:46-05:00".parse().unwrap());
+
+        assert_eq!(
+            r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <joe@example.com>  Mon, 04 Sep 2023 18:13:46 -0500
+"#,
+            entry.to_string()
+        );
+    }
+
+    #[test]
+    fn test_set_urgency() {
+        let mut entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        entry.set_urgency(Urgency::Medium);
+
+        assert_eq!(
+            r#"breezy (3.3.4-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#,
+            entry.to_string()
+        );
+    }
+
+    #[test]
+    fn test_set_metadata() {
+        let mut entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        entry.set_metadata("foo", "bar");
+
+        assert_eq!(
+            r#"breezy (3.3.4-1) unstable; urgency=low foo=bar
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#,
+            entry.to_string()
+        );
+    }
+
+    #[test]
+    fn test_add_change_for_author() {
+        let entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+  [ Jelmer Vernooĳ ]
+  * A change by the maintainer.
+
+ -- Joe Example <joe@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        entry.add_change_for_author(
+            &["A change by the maintainer."],
+            ("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()),
+        );
+    }
 }
