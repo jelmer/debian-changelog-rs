@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "{}: {}",
             entry.package().unwrap(),
-            entry.version().unwrap().to_string()
+            entry.version().unwrap()
         );
     }
     Ok(())

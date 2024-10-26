@@ -1,6 +1,8 @@
 #![deny(missing_docs)]
 //! A lossless parser for Debian changelog files.
 //!
+//! See https://manpages.debian.org/bookworm/dpkg-dev/deb-changelog.5.en.html
+//!
 //! For its format specification, see [Debian Policy](https://www.debian.org/doc/debian-policy/ch-source.html#debian-changelog-debian-changelog).
 //!
 //! Example:
@@ -28,8 +30,6 @@ pub mod changes;
 pub mod textwrap;
 
 pub use crate::parse::{ChangeLog, Entry, Error, ParseError, Urgency};
-
-/// See https://manpages.debian.org/bookworm/dpkg-dev/deb-changelog.5.en.html
 
 /// Let's start with defining all kinds of tokens and
 /// composite nodes.
@@ -284,19 +284,18 @@ fn test_distributions_is_unreleased() {
 /// Check whether this is a traditional inaugural release
 pub fn is_unreleased_inaugural(cl: &ChangeLog) -> bool {
     let mut entries = cl.entries();
-    match entries.next() {
-        None => return false,
-        Some(entry) => {
-            if entry.is_unreleased() == Some(false) {
-                return false;
-            }
-            let changes = entry.change_lines().collect::<Vec<_>>();
-            if changes.len() > 1 || !changes[0].starts_with("* Initial release") {
-                return false;
-            }
+    if let Some(entry) = entries.next() {
+        if entry.is_unreleased() == Some(false) {
+            return false;
         }
+        let changes = entry.change_lines().collect::<Vec<_>>();
+        if changes.len() > 1 || !changes[0].starts_with("* Initial release") {
+            return false;
+        }
+        entries.next().is_none()
+    } else {
+        false
     }
-    entries.next().is_none()
 }
 
 #[cfg(test)]

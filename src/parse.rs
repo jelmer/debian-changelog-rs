@@ -426,11 +426,11 @@ fn parse(text: &str) -> Parse {
     .parse()
 }
 
-/// To work with the parse results we need a view into the
-/// green tree - the Syntax tree.
-/// It is also immutable, like a GreenNode,
-/// but it contains parent pointers, offsets, and
-/// has identity semantics.
+// To work with the parse results we need a view into the
+// green tree - the Syntax tree.
+// It is also immutable, like a GreenNode,
+// but it contains parent pointers, offsets, and
+// has identity semantics.
 
 type SyntaxNode = rowan::SyntaxNode<Lang>;
 #[allow(unused)]
