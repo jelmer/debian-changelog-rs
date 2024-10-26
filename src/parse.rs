@@ -741,6 +741,41 @@ impl EntryBuilder {
     }
 }
 
+impl IntoIterator for ChangeLog {
+    type Item = Entry;
+    type IntoIter = std::vec::IntoIter<Entry>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        // TODO: This is inefficient
+        self.iter().collect::<Vec<_>>().into_iter()
+    }
+}
+
+fn replay(builder: &mut GreenNodeBuilder, node: SyntaxNode) {
+    builder.start_node(node.kind().into());
+    for child in node.children_with_tokens() {
+        match child {
+            SyntaxElement::Node(n) => replay(builder, n),
+            SyntaxElement::Token(t) => {
+                builder.token(t.kind().into(), t.text());
+            }
+        }
+    }
+    builder.finish_node();
+}
+
+impl FromIterator<Entry> for ChangeLog {
+    fn from_iter<T: IntoIterator<Item = Entry>>(iter: T) -> Self {
+        let mut builder = GreenNodeBuilder::new();
+        builder.start_node(ROOT.into());
+        for entry in iter {
+            replay(&mut builder, entry.0.clone());
+        }
+        builder.finish_node();
+        ChangeLog(SyntaxNode::new_root_mut(builder.finish()))
+    }
+}
+
 impl ChangeLog {
     /// Create a new, empty changelog.
     pub fn new() -> ChangeLog {
@@ -753,9 +788,15 @@ impl ChangeLog {
         ChangeLog(syntax)
     }
 
-    /// Returns an iterator over all entries in the watch file.
-    pub fn entries(&self) -> impl Iterator<Item = Entry> + '_ {
+    /// Returns an iterator over all entries in the changelog file.
+    pub fn iter(&self) -> impl Iterator<Item = Entry> + '_ {
         self.0.children().filter_map(Entry::cast)
+    }
+
+    /// Returns an iterator over all entries in the changelog file.
+    #[deprecated(since = "0.2.0", note = "use `iter` instead")]
+    pub fn entries(&self) -> impl Iterator<Item = Entry> + '_ {
+        self.iter()
     }
 
     /// Create a new, empty entry.
@@ -773,7 +814,7 @@ impl ChangeLog {
     }
 
     fn first_valid_entry(&self) -> Option<Entry> {
-        self.entries().find(|entry| {
+        self.iter().find(|entry| {
             entry.package().is_some() && entry.header().is_some() && entry.footer().is_some()
         })
     }
@@ -852,7 +893,7 @@ impl ChangeLog {
 
     /// Pop the first entry from the changelog.
     pub fn pop_first(&mut self) -> Option<Entry> {
-        let mut it = self.entries();
+        let mut it = self.iter();
         if let Some(entry) = it.next() {
             // Drop trailing newlines
             while let Some(sibling) = entry.0.next_sibling() {
@@ -930,7 +971,7 @@ impl FromStr for Entry {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let cl: ChangeLog = s.parse()?;
-        let mut entries = cl.entries();
+        let mut entries = cl.iter();
         let entry = entries
             .next()
             .ok_or_else(|| ParseError(vec!["no entries found".to_string()]))?;
@@ -1856,7 +1897,7 @@ breezy (3.3.3-2) unstable; urgency=medium
         );
 
         let mut root = parsed.root_mut();
-        let entries: Vec<_> = root.entries().collect();
+        let entries: Vec<_> = root.iter().collect();
         assert_eq!(entries.len(), 2);
         let entry = &entries[0];
         assert_eq!(entry.package(), Some("breezy".into()));
@@ -1931,7 +1972,7 @@ breezy (3.3.3-2) unstable; urgency=medium
             cl.to_string()
         );
 
-        assert!(!cl.entries().next().unwrap().is_unreleased().unwrap());
+        assert!(!cl.iter().next().unwrap().is_unreleased().unwrap());
     }
 
     #[test]
@@ -1970,7 +2011,7 @@ breezy (3.3.3-2) unstable; urgency=medium
 "###,
             cl.to_string()
         );
-        assert_eq!(cl.entries().next().unwrap().is_unreleased(), Some(true));
+        assert_eq!(cl.iter().next().unwrap().is_unreleased(), Some(true));
     }
 
     #[test]
@@ -1984,7 +2025,7 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
  -- Joe Example <joe@example.com>  Fri, 04 Oct 2019 02:36:13 +0000
 "#;
         let cl = ChangeLog::read_relaxed(text.as_bytes()).unwrap();
-        let entry = cl.entries().nth(1).unwrap();
+        let entry = cl.iter().nth(1).unwrap();
         assert_eq!(entry.package(), Some("lintian-brush".into()));
         assert_eq!(entry.version(), Some("0.35".parse().unwrap()));
         assert_eq!(entry.urgency(), Some(Urgency::Medium));
@@ -2069,7 +2110,7 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
 "#;
             let mut cl = super::ChangeLog::read(text.as_bytes()).unwrap();
 
-            let entry = cl.entries().next().unwrap();
+            let entry = cl.iter().next().unwrap();
             assert_eq!(entry.package(), Some("lintian-brush".into()));
             assert_eq!(entry.is_unreleased(), Some(true));
 
@@ -2080,7 +2121,7 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
                 None,
             );
 
-            assert_eq!(cl.entries().count(), 1);
+            assert_eq!(cl.iter().count(), 1);
 
             assert_eq!(entry.package(), Some("lintian-brush".into()));
             assert_eq!(entry.is_unreleased(), Some(true));
@@ -2112,7 +2153,7 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
 "#;
         let cl = ChangeLog::read(text.as_bytes()).unwrap();
 
-        let entry = cl.entries().next().unwrap();
+        let entry = cl.iter().next().unwrap();
         assert_eq!(entry.package(), Some("lintian-brush".into()));
 
         entry.ensure_first_line("* QA upload.");
@@ -2343,5 +2384,21 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
             &["A change by the maintainer."],
             ("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()),
         );
+    }
+
+    #[test]
+    fn test_changelog_from_entry_iter() {
+        let text = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@jelmer.uk>  Mon, 04 Sep 2023 18:13:45 -0500
+"#;
+
+        let entry: Entry = text.parse().unwrap();
+
+        let cl = std::iter::once(entry).collect::<ChangeLog>();
+
+        assert_eq!(cl.to_string(), text);
     }
 }

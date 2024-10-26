@@ -18,7 +18,7 @@
 //! let changelog: debian_changelog::ChangeLog = contents.parse().unwrap();
 //! assert_eq!(
 //!     vec![("rustc".to_string(), "1.70.0+dfsg1-1".parse().unwrap())],
-//!     changelog.entries().map(
+//!     changelog.iter().map(
 //!         |e| (e.package().unwrap(), e.version().unwrap()))
 //!     .collect::<Vec<_>>());
 //! ```
@@ -283,7 +283,7 @@ fn test_distributions_is_unreleased() {
 
 /// Check whether this is a traditional inaugural release
 pub fn is_unreleased_inaugural(cl: &ChangeLog) -> bool {
-    let mut entries = cl.entries();
+    let mut entries = cl.iter();
     if let Some(entry) = entries.next() {
         if entry.is_unreleased() == Some(false) {
             return false;
@@ -328,7 +328,7 @@ mod is_unreleased_inaugural_tests {
             .version("1.0.0".parse().unwrap())
             .change_line("* Initial release".to_string())
             .finish();
-        assert_eq!(cl.entries().next().unwrap().is_unreleased(), Some(false));
+        assert_eq!(cl.iter().next().unwrap().is_unreleased(), Some(false));
 
         // Not unreleased
         assert!(!is_unreleased_inaugural(&cl));
@@ -364,7 +364,7 @@ pub fn release(
     timestamp: Option<chrono::DateTime<chrono::FixedOffset>>,
     maintainer: Option<(String, String)>,
 ) -> bool {
-    let mut entries = cl.entries();
+    let mut entries = cl.iter();
     let mut first_entry = entries.next().unwrap();
     let second_entry = entries.next();
     let distribution = if let Some(d) = distribution.as_ref() {
