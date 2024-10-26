@@ -741,6 +741,41 @@ impl EntryBuilder {
     }
 }
 
+impl IntoIterator for ChangeLog {
+    type Item = Entry;
+    type IntoIter = std::vec::IntoIter<Entry>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        // TODO: This is inefficient
+        self.iter().collect::<Vec<_>>().into_iter()
+    }
+}
+
+fn replay(builder: &mut GreenNodeBuilder, node: SyntaxNode) {
+    builder.start_node(node.kind().into());
+    for child in node.children_with_tokens() {
+        match child {
+            SyntaxElement::Node(n) => replay(builder, n),
+            SyntaxElement::Token(t) => {
+                builder.token(t.kind().into(), t.text());
+            }
+        }
+    }
+    builder.finish_node();
+}
+
+impl FromIterator<Entry> for ChangeLog {
+    fn from_iter<T: IntoIterator<Item = Entry>>(iter: T) -> Self {
+        let mut builder = GreenNodeBuilder::new();
+        builder.start_node(ROOT.into());
+        for entry in iter {
+            replay(&mut builder, entry.0.clone());
+        }
+        builder.finish_node();
+        ChangeLog(SyntaxNode::new_root_mut(builder.finish()))
+    }
+}
+
 impl ChangeLog {
     /// Create a new, empty changelog.
     pub fn new() -> ChangeLog {
@@ -2349,5 +2384,21 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
             &["A change by the maintainer."],
             ("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()),
         );
+    }
+
+    #[test]
+    fn test_changelog_from_entry_iter() {
+        let text = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@jelmer.uk>  Mon, 04 Sep 2023 18:13:45 -0500
+"#;
+
+        let entry: Entry = text.parse().unwrap();
+
+        let cl = std::iter::once(entry).collect::<ChangeLog>();
+
+        assert_eq!(cl.to_string(), text);
     }
 }
