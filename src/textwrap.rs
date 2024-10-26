@@ -8,7 +8,10 @@ use lazy_regex::regex_captures;
 use std::borrow::Cow;
 use textwrap::core::Word;
 
+/// Default width for text wrapping
 pub const DEFAULT_WIDTH: usize = 78;
+
+/// Initial indent for text wrapping
 pub const INITIAL_INDENT: &str = "* ";
 
 #[inline]
@@ -185,7 +188,7 @@ mod textwrap_tests {
     }
 }
 
-// Checks if two lines can join
+/// Check if two lines can join
 fn can_join(line1: &str, line2: &str) -> bool {
     if line1.ends_with(':') {
         return false;
@@ -246,13 +249,23 @@ fn any_long_lines(lines: &[&str], width: usize) -> bool {
 }
 
 #[derive(Debug, PartialEq)]
+/// Text wrapping error
 pub enum Error {
+    /// Missing bullet point in a line
     MissingBulletPoint {
+        /// Line with missing bullet point
         line: String,
     },
+
+    /// Unexpected indent in a line
     UnexpectedIndent {
+        /// Line number
         lineno: usize,
+
+        /// Line with unexpected indent
         line: String,
+
+        /// Found indent
         indent: usize,
     },
 }
@@ -365,7 +378,7 @@ fn rewrap_change<'a>(change: &[&'a str], width: Option<usize>) -> Result<Vec<Cow
     Ok(ret)
 }
 
-// Rewrap lines from an iterator of changes
+/// Rewrap lines from an iterator of changes
 pub fn rewrap_changes<'a>(
     changes: impl Iterator<Item = &'a str>,
 ) -> impl Iterator<Item = Cow<'a, str>> {

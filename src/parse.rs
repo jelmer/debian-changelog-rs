@@ -7,12 +7,22 @@ use rowan::ast::AstNode;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
+/// Urgency of the changes in the changelog entry
 pub enum Urgency {
     #[default]
+    /// Low urgency
     Low,
+
+    /// Medium urgency
     Medium,
+
+    /// High urgency
     High,
+
+    /// Emergency urgency
     Emergency,
+
+    /// Critical urgency
     Critical,
 }
 
@@ -44,8 +54,12 @@ impl FromStr for Urgency {
 }
 
 #[derive(Debug)]
+/// Error while reading a changelog file.
 pub enum Error {
+    /// I/O Error
     Io(std::io::Error),
+
+    /// Parsing error
     Parse(ParseError),
 }
 
@@ -67,6 +81,7 @@ impl From<std::io::Error> for Error {
 impl std::error::Error for Error {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Error while parsing
 pub struct ParseError(Vec<String>);
 
 impl std::fmt::Display for ParseError {
@@ -438,6 +453,7 @@ macro_rules! ast_node {
     ($ast:ident, $kind:ident) => {
         #[derive(PartialEq, Eq, Hash)]
         #[repr(transparent)]
+        /// A node in the changelog syntax tree.
         pub struct $ast(SyntaxNode);
 
         impl AstNode for $ast {
@@ -726,6 +742,7 @@ impl EntryBuilder {
 }
 
 impl ChangeLog {
+    /// Create a new, empty changelog.
     pub fn new() -> ChangeLog {
         let mut builder = GreenNodeBuilder::new();
 
@@ -741,6 +758,7 @@ impl ChangeLog {
         self.0.children().filter_map(Entry::cast)
     }
 
+    /// Create a new, empty entry.
     pub fn new_empty_entry(&mut self) -> EntryBuilder {
         EntryBuilder {
             root: self.0.clone(),
@@ -832,6 +850,7 @@ impl ChangeLog {
         }
     }
 
+    /// Pop the first entry from the changelog.
     pub fn pop_first(&mut self) -> Option<Entry> {
         let mut it = self.entries();
         if let Some(entry) = it.next() {
@@ -863,6 +882,7 @@ impl ChangeLog {
         Ok(buf.parse()?)
     }
 
+    /// Read a changelog file from a reader, allowing for syntax errors
     pub fn read_relaxed<R: std::io::Read>(mut r: R) -> Result<ChangeLog, Error> {
         let mut buf = String::new();
         r.read_to_string(&mut buf)?;
@@ -871,12 +891,14 @@ impl ChangeLog {
         Ok(parsed.root_mut())
     }
 
+    /// Write the changelog to a writer
     pub fn write<W: std::io::Write>(&self, mut w: W) -> Result<(), Error> {
         let buf = self.to_string();
         w.write_all(buf.as_bytes())?;
         Ok(())
     }
 
+    /// Write the changelog to a path
     pub fn write_to_path(&self, p: &std::path::Path) -> Result<(), Error> {
         let f = std::fs::File::create(p)?;
         self.write(f)?;
@@ -1408,6 +1430,7 @@ impl Entry {
         self.header().and_then(|h| h.package())
     }
 
+    /// Set the package name of the entry.
     pub fn set_package(&mut self, package: String) {
         self.header()
             .unwrap_or_else(|| self.create_header())
@@ -1419,6 +1442,7 @@ impl Entry {
         self.header().and_then(|h| h.version())
     }
 
+    /// Set the version of the entry.
     pub fn set_version(&mut self, version: &Version) {
         self.header()
             .unwrap_or_else(|| self.create_header())
@@ -1430,6 +1454,7 @@ impl Entry {
         self.header().and_then(|h| h.distributions())
     }
 
+    /// Set the distributions for the entry
     pub fn set_distributions(&mut self, distributions: Vec<String>) {
         self.header()
             .unwrap_or_else(|| self.create_header())
@@ -1446,6 +1471,7 @@ impl Entry {
         self.footer().and_then(|f| f.maintainer())
     }
 
+    /// Set the maintainer of the entry.
     pub fn set_maintainer(&mut self, maintainer: (String, String)) {
         let mut footer = self.footer().unwrap_or_else(|| self.create_footer());
 
@@ -1458,12 +1484,14 @@ impl Entry {
         self.footer().and_then(|f| f.timestamp())
     }
 
+    /// Set the timestamp of the entry.
     pub fn set_timestamp(&mut self, timestamp: String) {
         self.footer()
             .unwrap_or_else(|| self.create_footer())
             .set_timestamp(timestamp);
     }
 
+    /// Set the datetime of the entry.
     pub fn set_datetime(&mut self, datetime: DateTime<FixedOffset>) {
         self.set_timestamp(format!("{}", datetime.format("%a, %d %b %Y %H:%M:%S %z")));
     }
@@ -1499,10 +1527,12 @@ impl Entry {
         EntryFooter(self.0.children().last().unwrap().clone_for_update())
     }
 
+    /// Set the urgency of the entry.
     pub fn set_urgency(&mut self, urgency: Urgency) {
         self.set_metadata("urgency", urgency.to_string().as_str());
     }
 
+    /// Set a metadata key-value pair for the entry.
     pub fn set_metadata(&mut self, key: &str, value: &str) {
         self.header()
             .unwrap_or_else(|| self.create_header())
@@ -1553,6 +1583,7 @@ impl Entry {
         }
     }
 
+    /// Prepend a change line to the entry
     pub fn prepend_change_line(&self, line: &str) {
         let mut builder = GreenNodeBuilder::new();
         builder.start_node(ENTRY_BODY.into());
@@ -1576,6 +1607,7 @@ impl Entry {
         self.0.splice_children(index..index, vec![syntax.into()]);
     }
 
+    /// Pop the last change line from the entry
     pub fn pop_change_line(&self) -> Option<String> {
         // Find the last child of type ENTRY_BODY
         let last_child = self.0.children().filter(|n| n.kind() == ENTRY_BODY).last();
@@ -1597,6 +1629,7 @@ impl Entry {
         }
     }
 
+    /// Append a line to the changelog entry
     pub fn append_change_line(&self, line: &str) {
         let mut builder = GreenNodeBuilder::new();
         builder.start_node(ENTRY_BODY.into());
@@ -1647,6 +1680,9 @@ impl Entry {
         lines.into_iter().skip_while(|it| it.is_empty())
     }
 
+    /// Ensure that the first line of the entry is the specified line
+    ///
+    /// If the first line is not the specified line, it will be prepended to the entry.
     pub fn ensure_first_line(&self, line: &str) {
         let first_line = self.change_lines().next().map(|it| it.trim().to_string());
 

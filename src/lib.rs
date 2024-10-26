@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 //! A lossless parser for Debian changelog files.
 //!
 //! For its format specification, see [Debian Policy](https://www.debian.org/doc/debian-policy/ch-source.html#debian-changelog-debian-changelog).
@@ -35,6 +36,7 @@ pub use crate::parse::{ChangeLog, Entry, Error, ParseError, Urgency};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[allow(non_camel_case_types)]
 #[repr(u16)]
+#[allow(missing_docs)]
 pub enum SyntaxKind {
     IDENTIFIER = 0,
     INDENT,
@@ -92,6 +94,7 @@ pub fn parseaddr(s: &str) -> (Option<&str>, &str) {
     }
 }
 
+/// Get the maintainer information from the environment.
 pub fn get_maintainer_from_env(
     get_env: impl Fn(&str) -> Option<String>,
 ) -> Option<(String, String)> {
@@ -234,6 +237,7 @@ pub struct Identity {
 }
 
 impl Identity {
+    /// Create a new identity.
     pub fn new(name: String, email: String) -> Self {
         Self { name, email }
     }
