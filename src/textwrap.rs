@@ -145,7 +145,7 @@ pub fn textwrap<'a>(
     subsequent_indent: Option<&str>,
 ) -> Vec<Cow<'a, str>> {
     let options = options(width, initial_indent, subsequent_indent);
-    // Actual text wrapping using textwrap crate
+    // Actual text wrapping using textwrap create
     textwrap::wrap(text, options)
 }
 

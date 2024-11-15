@@ -1,6 +1,6 @@
-use crate::lex::lex;
-use crate::SyntaxKind;
-use crate::SyntaxKind::*;
+use create::lex::lex;
+use create::SyntaxKind;
+use create::SyntaxKind::*;
 use chrono::{DateTime, FixedOffset};
 use debversion::Version;
 use rowan::ast::AstNode;
@@ -837,7 +837,7 @@ impl ChangeLog {
             version,
             distributions: Some(vec!["UNRELEASED".into()]),
             urgency: Some(Urgency::default()),
-            maintainer: crate::get_maintainer(),
+            maintainer: create::get_maintainer(),
             timestamp: Some(chrono::Utc::now().into()),
             change_lines: vec![],
         }
@@ -1586,7 +1586,7 @@ impl Entry {
     /// section will be created for the author in the entry (e.g. "[ John Doe ]").
     pub fn add_change_for_author(&self, change: &[&str], author: (String, String)) {
         let changes_lines = self.change_lines().collect::<Vec<_>>();
-        let by_author = crate::changes::changes_by_author(changes_lines.iter().map(|s| s.as_str()))
+        let by_author = create::changes::changes_by_author(changes_lines.iter().map(|s| s.as_str()))
             .collect::<Vec<_>>();
 
         // There are no per author sections yet, so attribute current changes to changelog entry author
@@ -1594,13 +1594,13 @@ impl Entry {
             if let Some(maintainer_name) = self.maintainer() {
                 if author.0 != maintainer_name {
                     self.prepend_change_line(
-                        crate::changes::format_section_title(maintainer_name.as_str()).as_str(),
+                        create::changes::format_section_title(maintainer_name.as_str()).as_str(),
                     );
                     if !self.change_lines().last().unwrap().is_empty() {
                         self.append_change_line("");
                     }
                     self.append_change_line(
-                        crate::changes::format_section_title(author.0.as_str()).as_str(),
+                        create::changes::format_section_title(author.0.as_str()).as_str(),
                     );
                 }
             }
@@ -1608,7 +1608,7 @@ impl Entry {
             if last_section.0 != Some(author.0.as_str()) {
                 self.append_change_line("");
                 self.append_change_line(
-                    crate::changes::format_section_title(author.0.as_str()).as_str(),
+                    create::changes::format_section_title(author.0.as_str()).as_str(),
                 );
             }
         }
@@ -1619,7 +1619,7 @@ impl Entry {
             }
         }
 
-        for line in crate::textwrap::rewrap_changes(change.iter().copied()) {
+        for line in create::textwrap::rewrap_changes(change.iter().copied()) {
             self.append_change_line(line.as_ref());
         }
     }
@@ -1736,7 +1736,7 @@ impl Entry {
     pub fn is_unreleased(&self) -> Option<bool> {
         let distro_is_unreleased = self.distributions().as_ref().map(|ds| {
             let ds = ds.iter().map(|d| d.as_str()).collect::<Vec<&str>>();
-            crate::distributions_is_unreleased(ds.as_slice())
+            create::distributions_is_unreleased(ds.as_slice())
         });
 
         let footer_is_unreleased = if self.maintainer().is_none() && self.email().is_none() {

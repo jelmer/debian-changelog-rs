@@ -1,4 +1,4 @@
-use crate::SyntaxKind;
+use create::SyntaxKind;
 use std::iter::Peekable;
 use std::str::Chars;
 
@@ -162,21 +162,21 @@ impl<'a> Lexer<'a> {
 }
 
 impl Iterator for Lexer<'_> {
-    type Item = (crate::SyntaxKind, String);
+    type Item = (create::SyntaxKind, String);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.next_token()
     }
 }
 
-pub(crate) fn lex(input: &str) -> Vec<(SyntaxKind, String)> {
+pub(create) fn lex(input: &str) -> Vec<(SyntaxKind, String)> {
     let mut lexer = Lexer::new(input);
     lexer.by_ref().collect::<Vec<_>>()
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::SyntaxKind::*;
+    use create::SyntaxKind::*;
     #[test]
     fn test_empty() {
         assert_eq!(super::lex(""), vec![]);

@@ -331,7 +331,7 @@ pub fn add_change_for_author(
         }
     }
 
-    changes.extend(crate::textwrap::rewrap_changes(change.into_iter()).map(|s| s.to_string()));
+    changes.extend(create::textwrap::rewrap_changes(change.into_iter()).map(|s| s.to_string()));
 }
 
 #[cfg(test)]

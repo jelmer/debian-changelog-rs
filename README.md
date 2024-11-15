@@ -1,7 +1,7 @@
 Debian Changelog parser
 =======================
 
-This crate provides a parser for debian/changelog files, as described in the
+This create provides a parser for debian/changelog files, as described in the
 Debian policy,
 [section 4.4](https://www.debian.org/doc/debian-policy/ch-source.html#debian-changelog-debian-changelog).
 

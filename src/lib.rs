@@ -29,7 +29,7 @@ use lazy_regex::regex_captures;
 pub mod changes;
 pub mod textwrap;
 
-pub use crate::parse::{ChangeLog, Entry, Error, ParseError, Urgency};
+pub use create::parse::{ChangeLog, Entry, Error, ParseError, Urgency};
 
 /// Let's start with defining all kinds of tokens and
 /// composite nodes.
@@ -407,7 +407,7 @@ pub fn take_uploadership(entry: &mut Entry, maintainer: Option<(String, String)>
             if let Some(first_line) = entry.change_lines().next() {
                 if first_line.starts_with("[ ") {
                     entry.prepend_change_line(
-                        crate::changes::format_section_title(current_maintainer.as_str()).as_str(),
+                        create::changes::format_section_title(current_maintainer.as_str()).as_str(),
                     );
                 }
             }
