@@ -8,12 +8,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut contents = String::new();
     gz.read_to_string(&mut contents)?;
     let changelog: debian_changelog::ChangeLog = contents.parse()?;
-    for entry in changelog.entries() {
-        println!(
-            "{}: {}",
-            entry.package().unwrap(),
-            entry.version().unwrap()
-        );
+    for entry in changelog.iter() {
+        println!("{}: {}", entry.package().unwrap(), entry.version().unwrap());
     }
     Ok(())
 }
