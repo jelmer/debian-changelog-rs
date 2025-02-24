@@ -18,5 +18,5 @@ textwrap = "0.16.0"
 whoami = { version = "1", default-features = false }
 
 [dev-dependencies]
-flate2 = "1.0"
+flate2 = "1.1"
 maplit = "1.0.2"
