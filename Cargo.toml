@@ -14,7 +14,7 @@ debversion = ">=0.2"
 lazy-regex = ">=2"
 log = "0.4"
 rowan = "0.16.1"
-textwrap = "0.16.0"
+textwrap = "0.16.2"
 whoami = { version = "1", default-features = false }
 
 [dev-dependencies]
