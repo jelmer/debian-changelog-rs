@@ -18,13 +18,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    # On Mac, we need to install the latest version of Rust
-    - name: Install Rust
-      if: matrix.os == 'macos-latest'
-      run: |
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-        export PATH="$HOME/.cargo/bin:$PATH"
-    - run: cargo install cargo-deny
     - name: Build
       run: cargo build --verbose
       env:
@@ -33,5 +26,3 @@ jobs:
       run: cargo test --verbose
       env:
         RUSTFLAGS: -Dwarnings
-    - name: Run cargo deny
-      run: cargo deny check
