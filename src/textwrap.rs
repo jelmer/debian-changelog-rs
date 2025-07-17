@@ -39,6 +39,15 @@ mod can_break_word_tests {
     }
 
     #[test]
+    fn test_can_break_word_edge_cases() {
+        // Test position at end of string
+        assert!(!super::can_break_word("foo", 3));
+        
+        // Test empty string
+        assert!(!super::can_break_word("", 0));
+    }
+
+    #[test]
     fn test_closes() {
         assert!(!super::can_break_word("Closes: #123456", 6));
         assert!(!super::can_break_word("Closes: #123456", 7));
@@ -240,6 +249,33 @@ mod can_join_tests {
             " Lines with different indentation",
             "  can not join."
         ));
+    }
+
+    #[test]
+    fn test_can_join_edge_cases() {
+        // Test line ending with bracket
+        assert!(!super::can_join("Some text]", "Uppercase text"));
+        assert!(!super::can_join("Some text}", "Uppercase text"));
+        
+        // Test line ending with period and uppercase next line
+        assert!(super::can_join("End with period.", "Uppercase text"));
+        
+        // Test line not ending with period and uppercase next line
+        assert!(!super::can_join("No period", "Uppercase text"));
+        
+        // Test line2 starting with bullet points
+        assert!(!super::can_join("Some text", "  * bullet"));
+        assert!(!super::can_join("Some text", "  - bullet"));
+        assert!(!super::can_join("Some text", "  + bullet"));
+        
+        // Test line1 ending with colon
+        assert!(!super::can_join("Introduction:", "some text"));
+        
+        // Test same indentation
+        assert!(super::can_join("  same indent", "  can join"));
+        
+        // Test empty lines
+        assert!(super::can_join("", ""));
     }
 }
 

@@ -455,4 +455,123 @@ mod tests {
     fn test_parseaddr_empty() {
         assert_eq!((None, ""), parseaddr(""));
     }
+
+
+    #[test]
+    fn test_release_already_released() {
+        use crate::parse::ChangeLog;
+        
+        let mut changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let result = release(
+            &mut changelog,
+            Some(vec!["unstable".to_string()]),
+            None,
+            None,
+        );
+        
+        // The function returns true if the entry is NOT unreleased (already released)
+        assert!(result);
+    }
+
+    #[test]
+    fn test_release_unreleased() {
+        use crate::parse::ChangeLog;
+        
+        let mut changelog: ChangeLog = r#"breezy (3.3.4-1) UNRELEASED; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let result = release(
+            &mut changelog,
+            Some(vec!["unstable".to_string()]),
+            None,
+            Some(("Test User".to_string(), "test@example.com".to_string())),
+        );
+        
+        // The function returns false if the entry is unreleased
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_take_uploadership_same_maintainer() {
+        use crate::parse::ChangeLog;
+        
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Test User <test@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let mut entries: Vec<Entry> = changelog.into_iter().collect();
+        take_uploadership(
+            &mut entries[0],
+            Some(("Test User".to_string(), "test@example.com".to_string())),
+        );
+        
+        // Should not add author section when maintainer is the same
+        assert!(!entries[0].to_string().contains("[ Test User ]"));
+    }
+
+    #[test]
+    fn test_take_uploadership_different_maintainer() {
+        use crate::parse::ChangeLog;
+        
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Original User <original@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let mut entries: Vec<Entry> = changelog.into_iter().collect();
+        
+        take_uploadership(
+            &mut entries[0],
+            Some(("New User".to_string(), "new@example.com".to_string())),
+        );
+        
+        // The take_uploadership function updates the maintainer in the footer
+        assert!(entries[0].to_string().contains("New User <new@example.com>"));
+        assert_eq!(entries[0].email(), Some("new@example.com".to_string()));
+    }
+
+    #[test]
+    fn test_identity_display() {
+        let identity = Identity {
+            name: "Test User".to_string(),
+            email: "test@example.com".to_string(),
+        };
+        assert_eq!(identity.to_string(), "Test User <test@example.com>");
+
+        let identity_empty_name = Identity {
+            name: "".to_string(),
+            email: "test@example.com".to_string(),
+        };
+        assert_eq!(identity_empty_name.to_string(), " <test@example.com>");
+    }
+
+    #[test]
+    fn test_gbp_dch_failure() {
+        // Test with invalid path that would cause gbp dch to fail
+        let result = gbp_dch(std::path::Path::new("/nonexistent/path"));
+        assert!(result.is_err());
+    }
 }
