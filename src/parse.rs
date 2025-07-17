@@ -2247,6 +2247,22 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
     }
 
     #[test]
+    fn test_set_distributions_no_existing() {
+        let mut entry: Entry = r#"breezy (3.3.4-1); urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        entry.set_distributions(vec!["unstable".into()]);
+
+        assert!(entry.to_string().contains("unstable"));
+    }
+
+    #[test]
     fn test_set_maintainer() {
         let mut entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
 
@@ -2367,6 +2383,54 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
     }
 
     #[test]
+    fn test_set_metadata_replace_existing() {
+        let mut entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low foo=old
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        entry.set_metadata("foo", "new");
+
+        assert_eq!(
+            r#"breezy (3.3.4-1) unstable; urgency=low foo=new
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#,
+            entry.to_string()
+        );
+    }
+
+    #[test]
+    fn test_set_metadata_after_distributions() {
+        let mut entry: Entry = r#"breezy (3.3.4-1) unstable experimental; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        entry.set_metadata("foo", "bar");
+
+        assert_eq!(
+            r#"breezy (3.3.4-1) unstable experimental; urgency=low foo=bar
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#,
+            entry.to_string()
+        );
+    }
+
+    #[test]
     fn test_add_change_for_author() {
         let entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
 
@@ -2400,5 +2464,209 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
         let cl = std::iter::once(entry).collect::<ChangeLog>();
 
         assert_eq!(cl.to_string(), text);
+    }
+
+    #[test]
+    fn test_pop_change_line() {
+        let entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+  * Fixed bug #123.
+  * Added new feature.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        // Test popping existing lines
+        assert_eq!(entry.pop_change_line(), Some("* Added new feature.".to_string()));
+        assert_eq!(entry.pop_change_line(), Some("* Fixed bug #123.".to_string()));
+        assert_eq!(entry.pop_change_line(), Some("* New upstream release.".to_string()));
+        
+        // Test popping from empty entry
+        assert_eq!(entry.pop_change_line(), None);
+    }
+
+    #[test]
+    fn test_pop_change_line_empty_entry() {
+        let entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        assert_eq!(entry.pop_change_line(), None);
+    }
+
+    #[test]
+    fn test_pop_change_line_empty_string() {
+        let entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * Something
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        entry.pop_change_line();
+        entry.append_change_line("");
+        // Empty lines don't have DETAIL tokens, so pop_change_line returns None
+        assert_eq!(entry.pop_change_line(), None);
+    }
+
+    #[test]
+    fn test_append_change_line() {
+        let entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        entry.append_change_line("* Fixed bug #456.");
+        
+        assert_eq!(
+            entry.to_string(),
+            r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+  * Fixed bug #456.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        );
+    }
+
+    #[test]
+    fn test_append_change_line_empty() {
+        let entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        entry.append_change_line("");
+        
+        let lines: Vec<String> = entry.change_lines().collect();
+        // Empty lines are not returned by change_lines()
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0], "* New upstream release.".to_string());
+    }
+
+
+    #[test]
+    fn test_changelog_write_to_path() {
+        use tempfile::NamedTempFile;
+
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_path_buf();
+        
+        changelog.write_to_path(&path).unwrap();
+        
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents, changelog.to_string());
+    }
+
+    #[test]
+    fn test_changelog_into_iter() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+
+breezy (3.3.3-1) unstable; urgency=low
+
+  * Previous release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 03 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let entries: Vec<Entry> = changelog.into_iter().collect();
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn test_set_version_no_existing() {
+        let mut entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        entry.set_version(&"1.0.0".parse().unwrap());
+
+        assert!(entry.to_string().contains("(1.0.0)"));
+    }
+
+    #[test]
+    fn test_entry_footer_set_email_edge_cases() {
+        let entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        // Test checking email through entry
+        assert_eq!(entry.email(), Some("jelmer@debian.org".to_string()));
+    }
+
+    #[test]
+    fn test_entry_footer_set_maintainer_edge_cases() {
+        let mut entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        // Test setting maintainer
+        entry.set_maintainer(("New Maintainer".into(), "new@example.com".into()));
+        
+        assert!(entry.to_string().contains("New Maintainer <new@example.com>"));
+    }
+
+    #[test]
+    fn test_entry_footer_set_timestamp_edge_cases() {
+        let mut entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  
+"#
+        .parse()
+        .unwrap();
+
+        // Test setting timestamp when it's missing
+        entry.set_timestamp("Mon, 04 Sep 2023 18:13:45 -0500".into());
+        
+        assert!(entry.to_string().contains("Mon, 04 Sep 2023 18:13:45 -0500"));
     }
 }

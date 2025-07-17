@@ -239,4 +239,74 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn test_email_edge_cases() {
+        // Test email without closing >
+        assert_eq!(
+            super::lex(" -- Name <email@example.com")
+                .iter()
+                .map(|(kind, text)| (*kind, text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (INDENT, " -- "),
+                (TEXT, "Name"),
+                (WHITESPACE, " "),
+                (ERROR, "<email@example.com"),
+            ]
+        );
+
+        // Test email with extra characters after >
+        assert_eq!(
+            super::lex(" -- Name <email@example.com>x")
+                .iter()
+                .map(|(kind, text)| (*kind, text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (INDENT, " -- "),
+                (TEXT, "Name"),
+                (WHITESPACE, " "),
+                (EMAIL, "<email@example.com>"),
+                (TEXT, "x"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_comment_without_newline() {
+        assert_eq!(
+            super::lex("# Comment without newline")
+                .iter()
+                .map(|(kind, text)| (*kind, text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(COMMENT, "# Comment without newline")]
+        );
+    }
+
+    #[test]
+    fn test_footer_text_parsing() {
+        // Test footer line with various characters
+        assert_eq!(
+            super::lex(" -- Name123-test")
+                .iter()
+                .map(|(kind, text)| (*kind, text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (INDENT, " -- "),
+                (TEXT, "Name123-test"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_whitespace_handling() {
+        // Test various whitespace scenarios - when at start of line with detail context, it becomes INDENT
+        assert_eq!(
+            super::lex("  \t  ")
+                .iter()
+                .map(|(kind, text)| (*kind, text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(INDENT, "  "), (DETAIL, "\t  ")]
+        );
+    }
 }
