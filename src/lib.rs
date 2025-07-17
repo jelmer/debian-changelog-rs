@@ -260,9 +260,14 @@ impl std::fmt::Display for Identity {
     }
 }
 
+/// Constant for the unreleased distribution name
+pub const UNRELEASED: &str = "UNRELEASED";
+/// Prefix for unreleased distribution variants
+const UNRELEASED_PREFIX: &str = "UNRELEASED-";
+
 /// Check if the given distribution marks an unreleased entry.
 pub fn distribution_is_unreleased(distribution: &str) -> bool {
-    distribution == "UNRELEASED" || distribution.starts_with("UNRELEASED-")
+    distribution == UNRELEASED || distribution.starts_with(UNRELEASED_PREFIX)
 }
 
 /// Check if any of the given distributions marks an unreleased entry.
@@ -312,7 +317,7 @@ mod is_unreleased_inaugural_tests {
         let mut cl = ChangeLog::new();
         cl.new_entry()
             .maintainer(("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()))
-            .distribution("UNRELEASED".to_string())
+            .distribution(UNRELEASED.to_string())
             .version("1.0.0".parse().unwrap())
             .change_line("* Initial release".to_string())
             .finish();
@@ -335,7 +340,7 @@ mod is_unreleased_inaugural_tests {
 
         cl.new_entry()
             .maintainer(("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()))
-            .distribution("UNRELEASED".to_string())
+            .distribution(UNRELEASED.to_string())
             .version("1.0.1".parse().unwrap())
             .change_line("* Some change".to_string())
             .finish();
@@ -344,17 +349,17 @@ mod is_unreleased_inaugural_tests {
     }
 }
 
-const DEFAULT_DISTRIBUTION: &[&str] = &["UNRELEASED"];
+const DEFAULT_DISTRIBUTION: &[&str] = &[UNRELEASED];
 
 /// Create a release for a changelog file.
 ///
 /// # Arguments
 /// * `cl` - The changelog to release
 /// * `distribution` - The distribution to release to. If None, the distribution
-///      of the previous entry is used.
-///  * `timestamp` - The timestamp to use for the release. If None, the current time is used.
-///  * `maintainer` - The maintainer to use for the release. If None, the maintainer
-///       is extracted from the environment.
+///   of the previous entry is used.
+/// * `timestamp` - The timestamp to use for the release. If None, the current time is used.
+/// * `maintainer` - The maintainer to use for the release. If None, the maintainer
+///   is extracted from the environment.
 ///
 /// # Returns
 /// Whether a release was created.
@@ -367,19 +372,17 @@ pub fn release(
     let mut entries = cl.iter();
     let mut first_entry = entries.next().unwrap();
     let second_entry = entries.next();
-    let distribution = if let Some(d) = distribution.as_ref() {
-        d.clone()
-    } else {
+    let distribution = distribution.unwrap_or_else(|| {
         // Inherit from previous entry
-        if let Some(d) = second_entry.and_then(|e| e.distributions()) {
-            d
-        } else {
-            DEFAULT_DISTRIBUTION
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-        }
-    };
+        second_entry
+            .and_then(|e| e.distributions())
+            .unwrap_or_else(|| {
+                DEFAULT_DISTRIBUTION
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+            })
+    });
     if first_entry.is_unreleased() == Some(false) {
         take_uploadership(&mut first_entry, maintainer);
         first_entry.set_distributions(distribution);
@@ -426,13 +429,10 @@ pub fn gbp_dch(path: &std::path::Path) -> std::result::Result<(), std::io::Error
         .output()?;
 
     if !output.status.success() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!(
-                "gbp dch failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
-        ));
+        return Err(std::io::Error::other(format!(
+            "gbp dch failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
     }
 
     Ok(())
@@ -456,11 +456,10 @@ mod tests {
         assert_eq!((None, ""), parseaddr(""));
     }
 
-
     #[test]
     fn test_release_already_released() {
         use crate::parse::ChangeLog;
-        
+
         let mut changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
 
   * New upstream release.
@@ -476,7 +475,7 @@ mod tests {
             None,
             None,
         );
-        
+
         // The function returns true if the entry is NOT unreleased (already released)
         assert!(result);
     }
@@ -484,7 +483,7 @@ mod tests {
     #[test]
     fn test_release_unreleased() {
         use crate::parse::ChangeLog;
-        
+
         let mut changelog: ChangeLog = r#"breezy (3.3.4-1) UNRELEASED; urgency=low
 
   * New upstream release.
@@ -500,7 +499,7 @@ mod tests {
             None,
             Some(("Test User".to_string(), "test@example.com".to_string())),
         );
-        
+
         // The function returns false if the entry is unreleased
         assert!(!result);
     }
@@ -508,7 +507,7 @@ mod tests {
     #[test]
     fn test_take_uploadership_same_maintainer() {
         use crate::parse::ChangeLog;
-        
+
         let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
 
   * New upstream release.
@@ -523,7 +522,7 @@ mod tests {
             &mut entries[0],
             Some(("Test User".to_string(), "test@example.com".to_string())),
         );
-        
+
         // Should not add author section when maintainer is the same
         assert!(!entries[0].to_string().contains("[ Test User ]"));
     }
@@ -531,7 +530,7 @@ mod tests {
     #[test]
     fn test_take_uploadership_different_maintainer() {
         use crate::parse::ChangeLog;
-        
+
         let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
 
   * New upstream release.
@@ -542,14 +541,16 @@ mod tests {
         .unwrap();
 
         let mut entries: Vec<Entry> = changelog.into_iter().collect();
-        
+
         take_uploadership(
             &mut entries[0],
             Some(("New User".to_string(), "new@example.com".to_string())),
         );
-        
+
         // The take_uploadership function updates the maintainer in the footer
-        assert!(entries[0].to_string().contains("New User <new@example.com>"));
+        assert!(entries[0]
+            .to_string()
+            .contains("New User <new@example.com>"));
         assert_eq!(entries[0].email(), Some("new@example.com".to_string()));
     }
 

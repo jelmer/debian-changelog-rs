@@ -16,15 +16,11 @@ pub const INITIAL_INDENT: &str = "* ";
 
 #[inline]
 fn can_break_word(line: &str, pos: usize) -> bool {
-    if let Some(_bugnp) = line.strip_prefix("Closes: #") {
-        if pos < line.find('#').unwrap() {
-            return false;
-        }
+    if line.starts_with("Closes: #") && pos < "Closes: ".len() {
+        return false;
     }
-    if let Some(_lpbugno) = line.strip_prefix("LP: #") {
-        if pos < line.find('#').unwrap() {
-            return false;
-        }
+    if line.starts_with("LP: #") && pos < "LP: ".len() {
+        return false;
     }
     line[pos..].starts_with(' ')
 }
@@ -42,7 +38,7 @@ mod can_break_word_tests {
     fn test_can_break_word_edge_cases() {
         // Test position at end of string
         assert!(!super::can_break_word("foo", 3));
-        
+
         // Test empty string
         assert!(!super::can_break_word("", 0));
     }
@@ -256,24 +252,24 @@ mod can_join_tests {
         // Test line ending with bracket
         assert!(!super::can_join("Some text]", "Uppercase text"));
         assert!(!super::can_join("Some text}", "Uppercase text"));
-        
+
         // Test line ending with period and uppercase next line
         assert!(super::can_join("End with period.", "Uppercase text"));
-        
+
         // Test line not ending with period and uppercase next line
         assert!(!super::can_join("No period", "Uppercase text"));
-        
+
         // Test line2 starting with bullet points
         assert!(!super::can_join("Some text", "  * bullet"));
         assert!(!super::can_join("Some text", "  - bullet"));
         assert!(!super::can_join("Some text", "  + bullet"));
-        
+
         // Test line1 ending with colon
         assert!(!super::can_join("Introduction:", "some text"));
-        
+
         // Test same indentation
         assert!(super::can_join("  same indent", "  can join"));
-        
+
         // Test empty lines
         assert!(super::can_join("", ""));
     }
@@ -472,7 +468,7 @@ mod rewrap_tests {
         let long = "x".repeat(100);
         assert_eq!(
             super::Error::MissingBulletPoint { line: long.clone() },
-            rewrap_change(&[long.as_str()], None).unwrap_err()
+            rewrap_change(&[&long], None).unwrap_err()
         );
     }
 

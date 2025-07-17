@@ -93,7 +93,7 @@ impl<'a> Lexer<'a> {
                     let comment = self.read_while(|c| !Self::is_newline(c));
                     let n = self.input.next();
                     if let Some(n) = n {
-                        Some((SyntaxKind::COMMENT, comment + n.to_string().as_str()))
+                        Some((SyntaxKind::COMMENT, comment + &n.to_string()))
                     } else {
                         Some((SyntaxKind::COMMENT, comment))
                     }
@@ -101,29 +101,26 @@ impl<'a> Lexer<'a> {
                 (c, _) if Self::is_newline(c) => {
                     self.input.next();
                     self.line_type = None;
-                    Some((SyntaxKind::NEWLINE, c.to_string()))
+                    Some((SyntaxKind::NEWLINE, String::from(c)))
                 }
                 (';', Some(LineType::Header)) => Some((
                     SyntaxKind::SEMICOLON,
-                    self.input.next().unwrap().to_string(),
+                    String::from(self.input.next().unwrap()),
                 )),
                 ('(', Some(LineType::Header)) => {
                     let version = self
                         .read_while(|c| c != ')' && c != ';' && c != ' ' && !Self::is_newline(c));
                     let n = self.input.next();
                     if n == Some(')') {
-                        Some((
-                            SyntaxKind::VERSION,
-                            version + n.unwrap().to_string().as_str(),
-                        ))
+                        Some((SyntaxKind::VERSION, version + &n.unwrap().to_string()))
                     } else if let Some(n) = n {
-                        Some((SyntaxKind::ERROR, version + n.to_string().as_str()))
+                        Some((SyntaxKind::ERROR, version + &n.to_string()))
                     } else {
                         Some((SyntaxKind::ERROR, version))
                     }
                 }
                 ('=', Some(LineType::Header)) => {
-                    Some((SyntaxKind::EQUALS, self.input.next().unwrap().to_string()))
+                    Some((SyntaxKind::EQUALS, String::from(self.input.next().unwrap())))
                 }
                 (_, Some(LineType::Body)) => {
                     let detail = self.read_while(|c| !Self::is_newline(c));
@@ -138,9 +135,9 @@ impl<'a> Lexer<'a> {
                     let email = self.read_while(|c| c != '>' && c != ' ' && !Self::is_newline(c));
                     let n = self.input.next();
                     if n == Some('>') {
-                        Some((SyntaxKind::EMAIL, email + n.unwrap().to_string().as_str()))
+                        Some((SyntaxKind::EMAIL, email + &n.unwrap().to_string()))
                     } else if let Some(n) = n {
-                        Some((SyntaxKind::ERROR, email + n.to_string().as_str()))
+                        Some((SyntaxKind::ERROR, email + &n.to_string()))
                     } else {
                         Some((SyntaxKind::ERROR, email))
                     }
@@ -152,7 +149,7 @@ impl<'a> Lexer<'a> {
                 }
                 (_, _) => {
                     self.input.next();
-                    Some((SyntaxKind::ERROR, c.to_string()))
+                    Some((SyntaxKind::ERROR, String::from(c)))
                 }
             }
         } else {
@@ -291,10 +288,7 @@ mod tests {
                 .iter()
                 .map(|(kind, text)| (*kind, text.as_str()))
                 .collect::<Vec<_>>(),
-            vec![
-                (INDENT, " -- "),
-                (TEXT, "Name123-test"),
-            ]
+            vec![(INDENT, " -- "), (TEXT, "Name123-test"),]
         );
     }
 

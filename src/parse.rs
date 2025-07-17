@@ -835,7 +835,7 @@ impl ChangeLog {
             root: self.0.clone(),
             package,
             version,
-            distributions: Some(vec!["UNRELEASED".into()]),
+            distributions: Some(vec![crate::UNRELEASED.into()]),
             urgency: Some(Urgency::default()),
             maintainer: crate::get_maintainer(),
             timestamp: Some(chrono::Utc::now().into()),
@@ -2480,10 +2480,19 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
         .unwrap();
 
         // Test popping existing lines
-        assert_eq!(entry.pop_change_line(), Some("* Added new feature.".to_string()));
-        assert_eq!(entry.pop_change_line(), Some("* Fixed bug #123.".to_string()));
-        assert_eq!(entry.pop_change_line(), Some("* New upstream release.".to_string()));
-        
+        assert_eq!(
+            entry.pop_change_line(),
+            Some("* Added new feature.".to_string())
+        );
+        assert_eq!(
+            entry.pop_change_line(),
+            Some("* Fixed bug #123.".to_string())
+        );
+        assert_eq!(
+            entry.pop_change_line(),
+            Some("* New upstream release.".to_string())
+        );
+
         // Test popping from empty entry
         assert_eq!(entry.pop_change_line(), None);
     }
@@ -2529,7 +2538,7 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
         .unwrap();
 
         entry.append_change_line("* Fixed bug #456.");
-        
+
         assert_eq!(
             entry.to_string(),
             r#"breezy (3.3.4-1) unstable; urgency=low
@@ -2554,13 +2563,12 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
         .unwrap();
 
         entry.append_change_line("");
-        
+
         let lines: Vec<String> = entry.change_lines().collect();
         // Empty lines are not returned by change_lines()
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0], "* New upstream release.".to_string());
     }
-
 
     #[test]
     fn test_changelog_write_to_path() {
@@ -2577,9 +2585,9 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
 
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_path_buf();
-        
+
         changelog.write_to_path(&path).unwrap();
-        
+
         let contents = std::fs::read_to_string(&path).unwrap();
         assert_eq!(contents, changelog.to_string());
     }
@@ -2649,8 +2657,10 @@ breezy (3.3.3-1) unstable; urgency=low
 
         // Test setting maintainer
         entry.set_maintainer(("New Maintainer".into(), "new@example.com".into()));
-        
-        assert!(entry.to_string().contains("New Maintainer <new@example.com>"));
+
+        assert!(entry
+            .to_string()
+            .contains("New Maintainer <new@example.com>"));
     }
 
     #[test]
@@ -2666,7 +2676,9 @@ breezy (3.3.3-1) unstable; urgency=low
 
         // Test setting timestamp when it's missing
         entry.set_timestamp("Mon, 04 Sep 2023 18:13:45 -0500".into());
-        
-        assert!(entry.to_string().contains("Mon, 04 Sep 2023 18:13:45 -0500"));
+
+        assert!(entry
+            .to_string()
+            .contains("Mon, 04 Sep 2023 18:13:45 -0500"));
     }
 }
