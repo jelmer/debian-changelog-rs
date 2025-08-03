@@ -574,23 +574,9 @@ macro_rules! ast_node {
         }
 
         impl $ast {
+            #[allow(dead_code)]
             fn replace_root(&mut self, new_root: SyntaxNode) {
                 self.0 = Self::cast(new_root).unwrap().0;
-            }
-
-            /// Create a new empty mutable instance
-            pub fn new_mut() -> Self {
-                let mut builder = GreenNodeBuilder::new();
-                builder.start_node($kind.into());
-                builder.finish_node();
-                Self(SyntaxNode::new_root_mut(builder.finish()))
-            }
-
-            /// Make this node mutable for editing
-            pub fn make_mut(&mut self) {
-                if !self.0.is_mutable() {
-                    self.0 = self.0.clone_for_update();
-                }
             }
         }
 
