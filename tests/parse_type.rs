@@ -1,4 +1,4 @@
-use debian_changelog::{ChangeLog, Parse, ParseError};
+use debian_changelog::{ChangeLog, Parse};
 
 #[test]
 fn test_parse_clone() {
