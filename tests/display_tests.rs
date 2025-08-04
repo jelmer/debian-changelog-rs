@@ -9,7 +9,7 @@ fn test_error_display() {
     let display = format!("{}", error);
     assert!(display.contains("IO error"));
     assert!(display.contains("file not found"));
-    
+
     // Test Parse error display by triggering a parse error
     let result: Result<ChangeLog, _> = "invalid changelog".parse();
     assert!(result.is_err());
@@ -20,12 +20,12 @@ fn test_error_display() {
     }
 }
 
-#[test] 
+#[test]
 fn test_parse_error_from_invalid_input() {
     // Test that parsing invalid input produces errors with proper display
     let result: Result<ChangeLog, _> = "INVALID".parse();
     assert!(result.is_err());
-    
+
     if let Err(error) = result {
         let display = format!("{}", error);
         // Should contain some error message
