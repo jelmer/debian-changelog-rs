@@ -125,16 +125,127 @@ use rowan::{GreenNode, GreenToken};
 /// of currently in-progress nodes
 use rowan::GreenNodeBuilder;
 
-/// The parse results are stored as a "green tree".
-/// We'll discuss working with the results later
+/// The result of parsing: a syntax tree and a collection of errors.
+///
+/// This type is designed to be stored in Salsa databases as it contains
+/// the thread-safe `GreenNode` instead of the non-thread-safe `SyntaxNode`.
 #[derive(Debug)]
-struct Parse {
-    green_node: GreenNode,
-    #[allow(unused)]
+pub struct Parse<T> {
+    green: GreenNode,
     errors: Vec<String>,
+    _ty: std::marker::PhantomData<T>,
 }
 
-fn parse(text: &str) -> Parse {
+// The T parameter is only used as a phantom type, so we can implement Clone and PartialEq
+// without requiring T to implement them
+impl<T> Clone for Parse<T> {
+    fn clone(&self) -> Self {
+        Parse {
+            green: self.green.clone(),
+            errors: self.errors.clone(),
+            _ty: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T> PartialEq for Parse<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.green == other.green && self.errors == other.errors
+    }
+}
+
+impl<T> Eq for Parse<T> {}
+
+// Implement Send + Sync since GreenNode is thread-safe
+unsafe impl<T> Send for Parse<T> {}
+unsafe impl<T> Sync for Parse<T> {}
+
+impl<T> Parse<T> {
+    /// Create a new Parse result from a GreenNode and errors
+    pub fn new(green: GreenNode, errors: Vec<String>) -> Self {
+        Parse {
+            green,
+            errors,
+            _ty: std::marker::PhantomData,
+        }
+    }
+
+    /// Get the green node (thread-safe representation)
+    pub fn green(&self) -> &GreenNode {
+        &self.green
+    }
+
+    /// Get the syntax errors
+    pub fn errors(&self) -> &[String] {
+        &self.errors
+    }
+
+    /// Check if there are any errors
+    pub fn ok(&self) -> bool {
+        self.errors.is_empty()
+    }
+
+    /// Convert to a Result, returning the tree if there are no errors
+    pub fn to_result(self) -> Result<T, ParseError>
+    where
+        T: AstNode<Language = Lang>,
+    {
+        if self.errors.is_empty() {
+            let node = SyntaxNode::new_root(self.green);
+            Ok(T::cast(node).expect("root node has wrong type"))
+        } else {
+            Err(ParseError(self.errors))
+        }
+    }
+
+    /// Convert to a Result, returning a mutable tree if there are no errors
+    pub fn to_mut_result(self) -> Result<T, ParseError>
+    where
+        T: AstNode<Language = Lang>,
+    {
+        if self.errors.is_empty() {
+            let node = SyntaxNode::new_root_mut(self.green);
+            Ok(T::cast(node).expect("root node has wrong type"))
+        } else {
+            Err(ParseError(self.errors))
+        }
+    }
+
+    /// Get the parsed syntax tree, panicking if there are errors
+    pub fn tree(&self) -> T
+    where
+        T: AstNode<Language = Lang>,
+    {
+        assert!(
+            self.errors.is_empty(),
+            "tried to get tree with errors: {:?}",
+            self.errors
+        );
+        let node = SyntaxNode::new_root(self.green.clone());
+        T::cast(node).expect("root node has wrong type")
+    }
+
+    /// Get the syntax node
+    pub fn syntax_node(&self) -> SyntaxNode {
+        SyntaxNode::new_root(self.green.clone())
+    }
+
+    /// Get a mutable parsed syntax tree, panicking if there are errors
+    pub fn tree_mut(&self) -> T
+    where
+        T: AstNode<Language = Lang>,
+    {
+        assert!(
+            self.errors.is_empty(),
+            "tried to get tree with errors: {:?}",
+            self.errors
+        );
+        let node = SyntaxNode::new_root_mut(self.green.clone());
+        T::cast(node).expect("root node has wrong type")
+    }
+}
+
+fn parse(text: &str) -> Parse<ChangeLog> {
     struct Parser {
         /// input tokens, including whitespace,
         /// in *reverse* order.
@@ -355,7 +466,7 @@ fn parse(text: &str) -> Parse {
             self.builder.finish_node();
         }
 
-        fn parse(mut self) -> Parse {
+        fn parse(mut self) -> Parse<ChangeLog> {
             self.builder.start_node(ROOT.into());
             loop {
                 match self.current() {
@@ -381,10 +492,7 @@ fn parse(text: &str) -> Parse {
             self.builder.finish_node();
 
             // Turn the builder into a GreenNode
-            Parse {
-                green_node: self.builder.finish(),
-                errors: self.errors,
-            }
+            Parse::new(self.builder.finish(), self.errors)
         }
         /// Advance one token, adding it to the current branch of the tree builder.
         fn bump(&mut self) {
@@ -438,20 +546,9 @@ type SyntaxToken = rowan::SyntaxToken<Lang>;
 #[allow(unused)]
 type SyntaxElement = rowan::NodeOrToken<SyntaxNode, SyntaxToken>;
 
-impl Parse {
-    #[cfg(test)]
-    fn syntax(&self) -> SyntaxNode {
-        SyntaxNode::new_root(self.green_node.clone())
-    }
-
-    fn root_mut(&self) -> ChangeLog {
-        ChangeLog::cast(SyntaxNode::new_root_mut(self.green_node.clone())).unwrap()
-    }
-}
-
 macro_rules! ast_node {
     ($ast:ident, $kind:ident) => {
-        #[derive(PartialEq, Eq, Hash)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
         #[repr(transparent)]
         /// A node in the changelog syntax tree.
         pub struct $ast(SyntaxNode);
@@ -473,6 +570,13 @@ macro_rules! ast_node {
 
             fn syntax(&self) -> &SyntaxNode {
                 &self.0
+            }
+        }
+
+        impl $ast {
+            #[allow(dead_code)]
+            fn replace_root(&mut self, new_root: SyntaxNode) {
+                self.0 = Self::cast(new_root).unwrap().0;
             }
         }
 
@@ -788,6 +892,11 @@ impl ChangeLog {
         ChangeLog(syntax)
     }
 
+    /// Parse changelog text, returning a Parse result
+    pub fn parse(text: &str) -> Parse<ChangeLog> {
+        parse(text)
+    }
+
     /// Returns an iterator over all entries in the changelog file.
     pub fn iter(&self) -> impl Iterator<Item = Entry> + '_ {
         self.0.children().filter_map(Entry::cast)
@@ -832,7 +941,11 @@ impl ChangeLog {
             version.increment_debian();
         }
         EntryBuilder {
-            root: self.0.clone(),
+            root: if self.0.is_mutable() {
+                self.0.clone()
+            } else {
+                self.0.clone_for_update()
+            },
             package,
             version,
             distributions: Some(vec![crate::UNRELEASED.into()]),
@@ -929,7 +1042,9 @@ impl ChangeLog {
         r.read_to_string(&mut buf)?;
 
         let parsed = parse(&buf);
-        Ok(parsed.root_mut())
+        // For relaxed parsing, we ignore errors and return the tree anyway
+        let node = SyntaxNode::new_root_mut(parsed.green().clone());
+        Ok(ChangeLog::cast(node).expect("root node has wrong type"))
     }
 
     /// Write the changelog to a writer
@@ -957,12 +1072,7 @@ impl FromStr for ChangeLog {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parsed = parse(s);
-        if parsed.errors.is_empty() {
-            Ok(parsed.root_mut())
-        } else {
-            Err(ParseError(parsed.errors))
-        }
+        ChangeLog::parse(s).to_mut_result()
     }
 }
 
@@ -994,12 +1104,6 @@ impl EntryHeader {
             }
             None
         })
-    }
-
-    fn replace_root(&mut self, new_root: SyntaxNode) {
-        let parent = self.0.parent().unwrap();
-        parent.splice_children(self.0.index()..self.0.index() + 1, vec![new_root.into()]);
-        self.0 = parent.children().nth(self.0.index()).unwrap();
     }
 
     /// Returns the package name of the entry.
@@ -1278,12 +1382,6 @@ impl EntryFooter {
             .filter(|s| !s.is_empty())
     }
 
-    fn replace_root(&mut self, new_root: SyntaxNode) {
-        let parent = self.0.parent().unwrap();
-        parent.splice_children(self.0.index()..self.0.index() + 1, vec![new_root.into()]);
-        self.0 = parent.children().nth(self.0.index()).unwrap();
-    }
-
     /// Set the maintainer for the entry.
     pub fn set_maintainer(&mut self, maintainer: String) {
         let node = self
@@ -1425,38 +1523,6 @@ impl Maintainer {
     }
 }
 
-impl std::fmt::Debug for Entry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut debug = f.debug_struct("Entry");
-        if let Some(package) = self.package() {
-            debug.field("package", &package);
-        }
-        if let Some(version) = self.version() {
-            debug.field("version", &version);
-        }
-        if let Some(urgency) = self.urgency() {
-            debug.field("urgency", &urgency);
-        }
-        if let Some(maintainer) = self.maintainer() {
-            debug.field("maintainer", &maintainer);
-        }
-        if let Some(email) = self.email() {
-            debug.field("email", &email);
-        }
-        if let Some(timestamp) = self.timestamp() {
-            debug.field("timestamp", &timestamp);
-        }
-        if let Some(distributions) = self.distributions() {
-            debug.field("distributions", &distributions);
-        }
-        if let Some(urgency) = self.urgency() {
-            debug.field("urgency", &urgency);
-        }
-        debug.field("body", &self.change_lines().collect::<Vec<_>>());
-        debug.finish()
-    }
-}
-
 impl Entry {
     fn header(&self) -> Option<EntryHeader> {
         self.0.children().find_map(EntryHeader::cast)
@@ -1473,9 +1539,14 @@ impl Entry {
 
     /// Set the package name of the entry.
     pub fn set_package(&mut self, package: String) {
-        self.header()
-            .unwrap_or_else(|| self.create_header())
-            .set_package(package);
+        if let Some(mut header) = self.header() {
+            let header_index = header.0.index();
+            header.set_package(package);
+            self.0
+                .splice_children(header_index..header_index + 1, vec![header.0.into()]);
+        } else {
+            self.create_header().set_package(package);
+        }
     }
 
     /// Return the version of the entry.
@@ -1485,9 +1556,14 @@ impl Entry {
 
     /// Set the version of the entry.
     pub fn set_version(&mut self, version: &Version) {
-        self.header()
-            .unwrap_or_else(|| self.create_header())
-            .set_version(version);
+        if let Some(mut header) = self.header() {
+            let header_index = header.0.index();
+            header.set_version(version);
+            self.0
+                .splice_children(header_index..header_index + 1, vec![header.0.into()]);
+        } else {
+            self.create_header().set_version(version);
+        }
     }
 
     /// Return the distributions of the entry.
@@ -1497,9 +1573,14 @@ impl Entry {
 
     /// Set the distributions for the entry
     pub fn set_distributions(&mut self, distributions: Vec<String>) {
-        self.header()
-            .unwrap_or_else(|| self.create_header())
-            .set_distributions(distributions);
+        if let Some(mut header) = self.header() {
+            let header_index = header.0.index();
+            header.set_distributions(distributions);
+            self.0
+                .splice_children(header_index..header_index + 1, vec![header.0.into()]);
+        } else {
+            self.create_header().set_distributions(distributions);
+        }
     }
 
     /// Returns the email address of the maintainer.
@@ -1514,10 +1595,17 @@ impl Entry {
 
     /// Set the maintainer of the entry.
     pub fn set_maintainer(&mut self, maintainer: (String, String)) {
-        let mut footer = self.footer().unwrap_or_else(|| self.create_footer());
-
-        footer.set_maintainer(maintainer.0);
-        footer.set_email(maintainer.1);
+        if let Some(mut footer) = self.footer() {
+            let footer_index = footer.0.index();
+            footer.set_maintainer(maintainer.0);
+            footer.set_email(maintainer.1);
+            self.0
+                .splice_children(footer_index..footer_index + 1, vec![footer.0.into()]);
+        } else {
+            let mut footer = self.create_footer();
+            footer.set_maintainer(maintainer.0);
+            footer.set_email(maintainer.1);
+        }
     }
 
     /// Returns the timestamp of the entry, as the raw string.
@@ -1527,9 +1615,14 @@ impl Entry {
 
     /// Set the timestamp of the entry.
     pub fn set_timestamp(&mut self, timestamp: String) {
-        self.footer()
-            .unwrap_or_else(|| self.create_footer())
-            .set_timestamp(timestamp);
+        if let Some(mut footer) = self.footer() {
+            let footer_index = footer.0.index();
+            footer.set_timestamp(timestamp);
+            self.0
+                .splice_children(footer_index..footer_index + 1, vec![footer.0.into()]);
+        } else {
+            self.create_footer().set_timestamp(timestamp);
+        }
     }
 
     /// Set the datetime of the entry.
@@ -1575,9 +1668,14 @@ impl Entry {
 
     /// Set a metadata key-value pair for the entry.
     pub fn set_metadata(&mut self, key: &str, value: &str) {
-        self.header()
-            .unwrap_or_else(|| self.create_header())
-            .set_metadata(key, value)
+        if let Some(mut header) = self.header() {
+            let header_index = header.0.index();
+            header.set_metadata(key, value);
+            self.0
+                .splice_children(header_index..header_index + 1, vec![header.0.into()]);
+        } else {
+            self.create_header().set_metadata(key, value);
+        }
     }
 
     /// Add a change for the specified author
@@ -1783,8 +1881,8 @@ breezy (3.3.3-2) unstable; urgency=medium
 # Oh, and here is a comment
 "#;
         let parsed = parse(CHANGELOG);
-        assert_eq!(parsed.errors, Vec::<String>::new());
-        let node = parsed.syntax();
+        assert_eq!(parsed.errors(), &Vec::<String>::new());
+        let node = parsed.syntax_node();
         assert_eq!(
             format!("{:#?}", node),
             r###"ROOT@0..405
@@ -1896,7 +1994,7 @@ breezy (3.3.3-2) unstable; urgency=medium
 "###
         );
 
-        let mut root = parsed.root_mut();
+        let mut root = parsed.tree_mut();
         let entries: Vec<_> = root.iter().collect();
         assert_eq!(entries.len(), 2);
         let entry = &entries[0];

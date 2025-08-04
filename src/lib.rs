@@ -29,7 +29,7 @@ use lazy_regex::regex_captures;
 pub mod changes;
 pub mod textwrap;
 
-pub use crate::parse::{ChangeLog, Entry, Error, ParseError, Urgency};
+pub use crate::parse::{ChangeLog, Entry, Error, Parse, ParseError, Urgency};
 
 /// Let's start with defining all kinds of tokens and
 /// composite nodes.
