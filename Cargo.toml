@@ -20,4 +20,4 @@ whoami = { version = "1", default-features = false }
 [dev-dependencies]
 flate2 = "1.1"
 maplit = "1.0.2"
-tempfile = "3.21"
+tempfile = "3.22"
