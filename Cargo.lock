@@ -111,9 +111,9 @@ dependencies = [
 
 [[package]]
 name = "debversion"
-version = "0.4.7"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79574f3b742eecc49e9ad4c42faf4b3b3371a202b131c5693545d8388a4b27b5"
+checksum = "94b3734b1da78d7dd8b45634007e53d8b2b42cbe7bf1898f6d9f7600dfd6c320"
 dependencies = [
  "chrono",
  "lazy-regex",
