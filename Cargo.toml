@@ -10,12 +10,12 @@ authors = [ "Jelmer Vernooij <jelmer@jelmer.uk>",]
 
 [dependencies]
 chrono = "0.4.42"
-debversion = ">=0.2"
-lazy-regex = ">=2"
+debversion = ">=0.4.6, <0.6"
+lazy-regex = ">=3, <4"
 log = "0.4"
 rowan = "0.16.1"
 textwrap = "0.16.2"
-whoami = { version = "1", default-features = false }
+whoami = { version = ">=1.5, <2", default-features = false }
 
 [dev-dependencies]
 flate2 = "1.1"
