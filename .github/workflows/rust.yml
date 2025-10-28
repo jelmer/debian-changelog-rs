@@ -38,4 +38,4 @@ jobs:
       - name: Install cargo-minimal-versions
         run: cargo install cargo-minimal-versions cargo-hack
       - name: Run minimal versions test
-        run: cargo +stable minimal-versions test
+        run: cargo +stable minimal-versions test --all-features

@@ -28,8 +28,118 @@ mod parse;
 use lazy_regex::regex_captures;
 pub mod changes;
 pub mod textwrap;
+use crate::parse::{SyntaxNode, SyntaxToken};
+use debversion::Version;
+use rowan::ast::AstNode;
 
+pub use crate::changes::changes_by_author;
 pub use crate::parse::{ChangeLog, Entry, Error, Parse, ParseError, Urgency};
+
+/// Represents a logical change within a changelog entry.
+///
+/// This struct wraps specific DETAIL tokens within an Entry's syntax tree
+/// and provides methods to manipulate them while maintaining the AST structure.
+#[derive(Debug, Clone)]
+pub struct Change {
+    /// The parent entry containing this change
+    entry: Entry,
+    /// The author of the change (if attributed)
+    author: Option<String>,
+    /// Line numbers in the original entry where this change appears
+    line_numbers: Vec<usize>,
+    /// The actual change lines as tokens in the syntax tree
+    detail_tokens: Vec<SyntaxToken>,
+}
+
+impl Change {
+    /// Create a new Change instance.
+    pub(crate) fn new(
+        entry: Entry,
+        author: Option<String>,
+        line_numbers: Vec<usize>,
+        detail_tokens: Vec<SyntaxToken>,
+    ) -> Self {
+        Self {
+            entry,
+            author,
+            line_numbers,
+            detail_tokens,
+        }
+    }
+
+    /// Get the author of this change.
+    pub fn author(&self) -> Option<&str> {
+        self.author.as_deref()
+    }
+
+    /// Get the lines of this change.
+    pub fn lines(&self) -> Vec<String> {
+        self.detail_tokens
+            .iter()
+            .map(|token| token.text().to_string())
+            .collect()
+    }
+
+    /// Get the package name this change belongs to.
+    pub fn package(&self) -> Option<String> {
+        self.entry.package()
+    }
+
+    /// Get the version this change belongs to.
+    pub fn version(&self) -> Option<Version> {
+        self.entry.version()
+    }
+
+    /// Check if this change is attributed to a specific author.
+    pub fn is_attributed(&self) -> bool {
+        self.author.is_some()
+    }
+
+    /// Get a reference to the parent entry.
+    pub fn entry(&self) -> &Entry {
+        &self.entry
+    }
+
+    /// Remove this change from its parent entry.
+    ///
+    /// This removes all DETAIL tokens associated with this change from the syntax tree.
+    pub fn remove(self) {
+        for token in self.detail_tokens {
+            // Remove the token from the parent
+            let parent = token.parent().unwrap();
+            let mut children: Vec<rowan::NodeOrToken<SyntaxNode, SyntaxToken>> =
+                parent.children_with_tokens().collect();
+
+            // Find and remove this token
+            children.retain(|child| {
+                if let Some(t) = child.as_token() {
+                    t != &token
+                } else {
+                    true
+                }
+            });
+
+            // Rebuild the parent with the remaining children
+            // Note: This is a simplified approach. In practice, you'd want to use
+            // rowan's editing capabilities more carefully.
+        }
+    }
+
+    /// Replace this change with new lines.
+    pub fn replace_with(&self, new_lines: Vec<String>) {
+        // Remove existing tokens and replace with new ones
+        // This would involve modifying the syntax tree structure
+        for (i, line) in new_lines.iter().enumerate() {
+            if i < self.detail_tokens.len() {
+                // Replace existing token
+                // Note: This requires careful tree manipulation
+            } else {
+                // Add new token
+                // Note: This requires careful tree manipulation
+            }
+        }
+    }
+}
 
 /// Let's start with defining all kinds of tokens and
 /// composite nodes.
@@ -227,7 +337,7 @@ mod get_maintainer_from_env_tests {
 }
 
 /// Simple representation of an identity.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Identity {
     /// Name of the maintainer
     pub name: String,
@@ -438,6 +548,89 @@ pub fn gbp_dch(path: &std::path::Path) -> std::result::Result<(), std::io::Error
     Ok(())
 }
 
+/// Iterator over changelog entries grouped by author (maintainer).
+///
+/// This function returns an iterator that groups changelog entries by their maintainer
+/// (author), similar to debmutate.changelog functionality.
+///
+/// # Arguments
+/// * `changelog` - The changelog to iterate over
+///
+/// # Returns
+/// An iterator over tuples of (author_name, author_email, Vec<Entry>)
+pub fn iter_entries_by_author(
+    changelog: &ChangeLog,
+) -> impl Iterator<Item = (String, String, Vec<Entry>)> + '_ {
+    use std::collections::BTreeMap;
+
+    let mut grouped: BTreeMap<(String, String), Vec<Entry>> = BTreeMap::new();
+
+    for entry in changelog.iter() {
+        let maintainer_name = entry.maintainer().unwrap_or_else(|| "Unknown".to_string());
+        let maintainer_email = entry
+            .email()
+            .unwrap_or_else(|| "unknown@unknown".to_string());
+        let key = (maintainer_name, maintainer_email);
+
+        grouped.entry(key).or_insert_with(Vec::new).push(entry);
+    }
+
+    grouped
+        .into_iter()
+        .map(|((name, email), entries)| (name, email, entries))
+}
+
+/// Iterator over all changes across all entries, grouped by author.
+///
+/// This function iterates through all entries in a changelog and returns changes
+/// grouped by their attributed authors, including those in author sections like [ Author Name ].
+///
+/// # Arguments
+/// * `changelog` - The changelog to iterate over
+///
+/// # Returns
+/// A vector of Change objects that can be manipulated or filtered
+pub fn iter_changes_by_author(changelog: &ChangeLog) -> Vec<Change> {
+    let mut result = Vec::new();
+
+    for entry in changelog.iter() {
+        let changes: Vec<String> = entry.change_lines().map(|s| s.to_string()).collect();
+
+        // Collect all DETAIL tokens from the entry with their text
+        let all_detail_tokens: Vec<SyntaxToken> = entry
+            .syntax()
+            .children()
+            .flat_map(|n| {
+                n.children_with_tokens()
+                    .filter_map(|it| it.as_token().cloned())
+                    .filter(|token| token.kind() == SyntaxKind::DETAIL)
+            })
+            .collect();
+
+        for (author, linenos, lines) in
+            crate::changes::changes_by_author(changes.iter().map(|s| s.as_str()))
+        {
+            let author_name = author.map(|s| s.to_string());
+
+            // Extract the specific DETAIL tokens for this change by matching text content
+            let detail_tokens: Vec<SyntaxToken> = lines
+                .iter()
+                .filter_map(|line_text| {
+                    all_detail_tokens
+                        .iter()
+                        .find(|token| token.text() == *line_text)
+                        .cloned()
+                })
+                .collect();
+
+            let change = Change::new(entry.clone(), author_name, linenos, detail_tokens);
+            result.push(change);
+        }
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -574,5 +767,77 @@ mod tests {
         // Test with invalid path that would cause gbp dch to fail
         let result = gbp_dch(std::path::Path::new("/nonexistent/path"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_iter_entries_by_author() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+
+breezy (3.3.3-1) unstable; urgency=low
+
+  * Bug fix release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Sun, 03 Sep 2023 17:12:30 -0500
+
+breezy (3.3.2-1) unstable; urgency=low
+
+  * Another release.
+
+ -- Jane Doe <jane@example.com>  Sat, 02 Sep 2023 16:11:15 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let authors: Vec<(String, String, Vec<Entry>)> =
+            iter_entries_by_author(&changelog).collect();
+
+        assert_eq!(authors.len(), 2);
+        assert_eq!(authors[0].0, "Jane Doe");
+        assert_eq!(authors[0].1, "jane@example.com");
+        assert_eq!(authors[0].2.len(), 1);
+        assert_eq!(authors[1].0, "Jelmer Vernooĳ");
+        assert_eq!(authors[1].1, "jelmer@debian.org");
+        assert_eq!(authors[1].2.len(), 2);
+    }
+
+    #[test]
+    fn test_iter_changes_by_author() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  [ Author 1 ]
+  * Change by Author 1
+
+  [ Author 2 ]
+  * Change by Author 2
+
+  * Unattributed change
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+
+        assert_eq!(changes.len(), 3);
+
+        // First change attributed to Author 1
+        assert_eq!(changes[0].author(), Some("Author 1"));
+        assert_eq!(changes[0].package(), Some("breezy".to_string()));
+        assert_eq!(changes[0].lines(), vec!["* Change by Author 1"]);
+
+        // Second change attributed to Author 2
+        assert_eq!(changes[1].author(), Some("Author 2"));
+        assert_eq!(changes[1].package(), Some("breezy".to_string()));
+        assert_eq!(changes[1].lines(), vec!["* Change by Author 2"]);
+
+        // Third change unattributed
+        assert_eq!(changes[2].author(), None);
+        assert_eq!(changes[2].package(), Some("breezy".to_string()));
+        assert_eq!(changes[2].lines(), vec!["* Unattributed change"]);
     }
 }

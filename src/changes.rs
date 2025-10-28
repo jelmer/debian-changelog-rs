@@ -38,6 +38,7 @@ fn changes_sections<'a>(
     let mut ret: Vec<Section<'a>> = vec![];
     let mut section = Section::<'a>::default();
     let mut change = Vec::<(usize, &'a str)>::new();
+    let mut saw_empty = false;
 
     for (i, line) in changes.enumerate() {
         if line.is_empty() && i == 0 {
@@ -47,15 +48,16 @@ fn changes_sections<'a>(
 
         if line.is_empty() {
             section.linenos.push(i);
+            saw_empty = true;
             continue;
         }
 
-        if let Some((_, author)) = regex_captures!(r"^\[ (.*) \]$", line) {
+        if let Some((_, author)) = regex_captures!(r"^\[ (.*) \]\s*$", line) {
             if !change.is_empty() {
                 section.changes.push(change);
                 change = Vec::new();
             }
-            if !section.linenos.is_empty() {
+            if !section.changes.is_empty() {
                 ret.push(section);
             }
             section = Section {
@@ -63,21 +65,37 @@ fn changes_sections<'a>(
                 linenos: vec![i],
                 changes: vec![],
             };
+            saw_empty = false;
         } else if !line.starts_with("* ") {
             change.push((i, line));
             section.linenos.push(i);
+            saw_empty = false;
         } else {
+            // Starting a new bullet point
+            // If we saw an empty line and we're in a titled section, start a new anonymous section
+            if saw_empty && section.title.is_some() && !change.is_empty() {
+                section.changes.push(change);
+                change = Vec::new();
+                ret.push(section);
+                section = Section {
+                    title: None,
+                    linenos: vec![],
+                    changes: vec![],
+                };
+            }
+
             if !change.is_empty() {
                 section.changes.push(change);
             }
             change = vec![(i, line)];
             section.linenos.push(i);
+            saw_empty = false;
         }
     }
     if !change.is_empty() {
         section.changes.push(change);
     }
-    if !section.linenos.is_empty() {
+    if !section.changes.is_empty() {
         ret.push(section);
     }
 
@@ -95,15 +113,18 @@ fn changes_sections<'a>(
 pub fn changes_by_author<'a>(
     changes: impl Iterator<Item = &'a str>,
 ) -> impl Iterator<Item = (Option<&'a str>, Vec<usize>, Vec<&'a str>)> {
-    changes_sections(changes).flat_map(|section| {
-        section
-            .changes
-            .into_iter()
-            .map(|change_entry| {
-                let (linenos, lines): (Vec<_>, Vec<_>) = change_entry.into_iter().unzip();
-                (section.title, linenos, lines)
-            })
-            .collect::<Vec<_>>()
+    changes_sections(changes).map(|section| {
+        let mut all_linenos = Vec::new();
+        let mut all_lines = Vec::new();
+
+        for change_entry in section.changes {
+            for (lineno, line) in change_entry {
+                all_linenos.push(lineno);
+                all_lines.push(line);
+            }
+        }
+
+        (section.title, all_linenos, all_lines)
     })
 }
 

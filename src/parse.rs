@@ -367,7 +367,7 @@ fn parse(text: &str) -> Parse<ChangeLog> {
                     .map(|(kind, token)| (kind, token.as_str()))
                 {
                     None => {
-                        self.error("unexpected end of file".to_string());
+                        // End of file - entry without footer is valid
                         break;
                     }
                     // empty line
@@ -540,9 +540,9 @@ fn parse(text: &str) -> Parse<ChangeLog> {
 // but it contains parent pointers, offsets, and
 // has identity semantics.
 
-type SyntaxNode = rowan::SyntaxNode<Lang>;
+pub type SyntaxNode = rowan::SyntaxNode<Lang>;
 #[allow(unused)]
-type SyntaxToken = rowan::SyntaxToken<Lang>;
+pub type SyntaxToken = rowan::SyntaxToken<Lang>;
 #[allow(unused)]
 type SyntaxElement = rowan::NodeOrToken<SyntaxNode, SyntaxToken>;
 
@@ -1059,6 +1059,38 @@ impl ChangeLog {
         let f = std::fs::File::create(p)?;
         self.write(f)?;
         Ok(())
+    }
+
+    /// Iterator over entries grouped by their maintainer (author).
+    ///
+    /// Returns an iterator over tuples of (maintainer_name, maintainer_email, Vec<Entry>)
+    /// where entries with the same maintainer are grouped together.
+    pub fn iter_by_author(&self) -> impl Iterator<Item = (String, String, Vec<Entry>)> + '_ {
+        crate::iter_entries_by_author(self)
+    }
+
+    /// Get all unique authors across all entries in the changelog.
+    ///
+    /// This includes both maintainers from entry footers and authors from [ Author Name ] sections.
+    pub fn get_all_authors(&self) -> std::collections::HashSet<crate::Identity> {
+        let mut authors = std::collections::HashSet::new();
+
+        // Add maintainers from entry footers
+        for entry in self.iter() {
+            if let Some(identity) = entry.get_maintainer_identity() {
+                authors.insert(identity);
+            }
+        }
+
+        // Add authors from change sections
+        for entry in self.iter() {
+            for author_name in entry.get_authors() {
+                // Create identity with empty email since we only have names from change sections
+                authors.insert(crate::Identity::new(author_name, "".to_string()));
+            }
+        }
+
+        authors
     }
 }
 
@@ -1849,6 +1881,107 @@ impl Entry {
             (Some(false), _) => Some(false),
             (_, Some(false)) => Some(false),
             _ => None,
+        }
+    }
+
+    /// Iterator over changes in this entry grouped by author.
+    ///
+    /// Returns a vector of tuples (author_name, line_numbers, change_lines)
+    /// where author_name is Some for attributed changes or None for changes without attribution.
+    pub fn iter_changes_by_author(&self) -> Vec<(Option<String>, Vec<usize>, Vec<String>)> {
+        let changes: Vec<String> = self.change_lines().map(|s| s.to_string()).collect();
+        crate::changes::changes_by_author(changes.iter().map(|s| s.as_str()))
+            .map(|(author, linenos, lines)| {
+                let author_name = author.map(|s| s.to_string());
+                let change_lines = lines.into_iter().map(|s| s.to_string()).collect();
+                (author_name, linenos, change_lines)
+            })
+            .collect()
+    }
+
+    /// Get all authors mentioned in this entry's changes.
+    ///
+    /// This includes authors from [ Author Name ] sections in the change text,
+    /// but not the main maintainer/uploader from the entry footer.
+    pub fn get_authors(&self) -> std::collections::HashSet<String> {
+        let changes: Vec<String> = self.change_lines().map(|s| s.to_string()).collect();
+        let change_strs: Vec<&str> = changes.iter().map(|s| s.as_str()).collect();
+        crate::changes::find_extra_authors(&change_strs)
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    /// Get the maintainer information as an Identity struct.
+    ///
+    /// Returns the maintainer name and email from the entry footer if available.
+    pub fn get_maintainer_identity(&self) -> Option<crate::Identity> {
+        if let (Some(name), Some(email)) = (self.maintainer(), self.email()) {
+            Some(crate::Identity::new(name, email))
+        } else {
+            None
+        }
+    }
+
+    /// Add changes for a specific author to this entry.
+    ///
+    /// This will add an author section (e.g., `[ Author Name ]`) if needed,
+    /// and append the changes under that section. If this is the first attributed
+    /// change and there are existing unattributed changes, they will be wrapped
+    /// in the maintainer's section.
+    ///
+    /// # Arguments
+    /// * `author_name` - The name of the author to attribute the changes to
+    /// * `changes` - A list of change lines to add (e.g., `["* Fixed bug"]`)
+    ///
+    /// # Example
+    /// ```
+    /// use debian_changelog::Entry;
+    /// let entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+    ///
+    ///   * Existing change
+    ///
+    ///  -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+    /// "#.parse().unwrap();
+    ///
+    /// entry.add_changes_for_author("Alice", vec!["* New feature"]);
+    /// ```
+    pub fn add_changes_for_author(&self, author_name: &str, changes: Vec<&str>) {
+        let mut change_lines: Vec<String> = self.change_lines().collect();
+        let original_len = change_lines.len();
+        let default_author = self.get_maintainer_identity().map(|id| (id.name, id.email));
+
+        crate::changes::add_change_for_author(
+            &mut change_lines,
+            author_name,
+            changes,
+            default_author,
+        );
+
+        // The function modifies change_lines in place. We need to handle two cases:
+        // 1. Lines were inserted at the beginning (when wrapping existing changes)
+        // 2. Lines were appended at the end (normal case)
+
+        if change_lines.len() > original_len {
+            // New lines were added
+            let original_changes: Vec<_> = self.change_lines().collect();
+
+            // Check if lines were inserted at the start
+            let inserted_at_start = original_len > 0 && change_lines[0] != original_changes[0];
+
+            if inserted_at_start {
+                // Lines were inserted at the beginning - we need to rebuild
+                // This happens when converting unattributed changes to attributed ones
+                while self.pop_change_line().is_some() {}
+                for line in change_lines {
+                    self.append_change_line(&line);
+                }
+            } else {
+                // Lines were appended at the end - just append the new ones
+                for line in change_lines.iter().skip(original_len) {
+                    self.append_change_line(line);
+                }
+            }
         }
     }
 }
@@ -2778,5 +2911,241 @@ breezy (3.3.3-1) unstable; urgency=low
         assert!(entry
             .to_string()
             .contains("Mon, 04 Sep 2023 18:13:45 -0500"));
+    }
+
+    #[test]
+    fn test_entry_iter_changes_by_author() {
+        let entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  [ Author 1 ]
+  * Change by Author 1
+
+  [ Author 2 ]  
+  * Change by Author 2
+  * Another change by Author 2
+
+  * Unattributed change
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = entry.iter_changes_by_author();
+
+        assert_eq!(changes.len(), 3);
+
+        assert_eq!(changes[0].0, Some("Author 1".to_string()));
+        assert_eq!(changes[0].2, vec!["* Change by Author 1".to_string()]);
+
+        assert_eq!(changes[1].0, Some("Author 2".to_string()));
+        assert_eq!(
+            changes[1].2,
+            vec![
+                "* Change by Author 2".to_string(),
+                "* Another change by Author 2".to_string()
+            ]
+        );
+
+        assert_eq!(changes[2].0, None);
+        assert_eq!(changes[2].2, vec!["* Unattributed change".to_string()]);
+    }
+
+    #[test]
+    fn test_entry_get_authors() {
+        let entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  [ Author 1 ]
+  * Change by Author 1
+
+  [ Author 2 ]  
+  * Change by Author 2
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let authors = entry.get_authors();
+
+        assert_eq!(authors.len(), 2);
+        assert!(authors.contains("Author 1"));
+        assert!(authors.contains("Author 2"));
+        // Maintainer should not be in the authors from change sections
+        assert!(!authors.contains("Jelmer Vernooĳ"));
+    }
+
+    #[test]
+    fn test_entry_get_maintainer_identity() {
+        let entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let identity = entry.get_maintainer_identity().unwrap();
+
+        assert_eq!(identity.name, "Jelmer Vernooĳ");
+        assert_eq!(identity.email, "jelmer@debian.org");
+    }
+
+    #[test]
+    fn test_entry_get_maintainer_identity_missing() {
+        let entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+"#
+        .parse()
+        .unwrap();
+
+        let identity = entry.get_maintainer_identity();
+
+        assert!(identity.is_none());
+    }
+
+    #[test]
+    fn test_changelog_iter_by_author() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+
+breezy (3.3.3-1) unstable; urgency=low
+
+  * Bug fix release.
+
+ -- Jane Doe <jane@example.com>  Sun, 03 Sep 2023 17:12:30 -0500
+
+breezy (3.3.2-1) unstable; urgency=low
+
+  * Another release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Sat, 02 Sep 2023 16:11:15 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let authors: Vec<(String, String, Vec<Entry>)> = changelog.iter_by_author().collect();
+
+        assert_eq!(authors.len(), 2);
+        assert_eq!(authors[0].0, "Jane Doe");
+        assert_eq!(authors[0].1, "jane@example.com");
+        assert_eq!(authors[0].2.len(), 1);
+        assert_eq!(authors[1].0, "Jelmer Vernooĳ");
+        assert_eq!(authors[1].1, "jelmer@debian.org");
+        assert_eq!(authors[1].2.len(), 2);
+    }
+
+    #[test]
+    fn test_changelog_get_all_authors() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  [ Contributor 1 ]
+  * Contribution
+
+  * Main change
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+
+breezy (3.3.3-1) unstable; urgency=low
+
+  * Bug fix release.
+
+ -- Jane Doe <jane@example.com>  Sun, 03 Sep 2023 17:12:30 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let authors = changelog.get_all_authors();
+
+        assert_eq!(authors.len(), 3);
+
+        let author_names: std::collections::HashSet<String> = authors
+            .iter()
+            .map(|identity| identity.name.clone())
+            .collect();
+
+        assert!(author_names.contains("Jelmer Vernooĳ"));
+        assert!(author_names.contains("Jane Doe"));
+        assert!(author_names.contains("Contributor 1"));
+    }
+
+    #[test]
+    fn test_add_changes_for_author_no_existing_sections() {
+        let entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * Existing change
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        entry.add_changes_for_author("Alice", vec!["* Alice's change"]);
+
+        let lines: Vec<_> = entry.change_lines().collect();
+
+        // Should have wrapped existing changes in maintainer's section
+        assert!(lines.iter().any(|l| l.contains("[ Jelmer Vernooĳ ]")));
+        // Should have added Alice's section
+        assert!(lines.iter().any(|l| l.contains("[ Alice ]")));
+        // Should have both changes
+        assert!(lines.iter().any(|l| l.contains("Existing change")));
+        assert!(lines.iter().any(|l| l.contains("Alice's change")));
+    }
+
+    #[test]
+    fn test_add_changes_for_author_with_existing_sections() {
+        let entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  [ Author 1 ]
+  * Change by Author 1
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        entry.add_changes_for_author("Alice", vec!["* Alice's new change"]);
+
+        let lines: Vec<_> = entry.change_lines().collect();
+
+        // Should have Author 1's section
+        assert!(lines.iter().any(|l| l.contains("[ Author 1 ]")));
+        // Should have added Alice's section
+        assert!(lines.iter().any(|l| l.contains("[ Alice ]")));
+        // Should have both changes
+        assert!(lines.iter().any(|l| l.contains("Change by Author 1")));
+        assert!(lines.iter().any(|l| l.contains("Alice's new change")));
+    }
+
+    #[test]
+    fn test_add_changes_for_author_same_author() {
+        let entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  [ Alice ]
+  * First change
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        entry.add_changes_for_author("Alice", vec!["* Second change"]);
+
+        let lines: Vec<_> = entry.change_lines().collect();
+
+        // Should only have one Alice section (not duplicated)
+        let alice_count = lines.iter().filter(|l| l.contains("[ Alice ]")).count();
+        assert_eq!(alice_count, 1);
+
+        // Should have both changes
+        assert!(lines.iter().any(|l| l.contains("First change")));
+        assert!(lines.iter().any(|l| l.contains("Second change")));
     }
 }
