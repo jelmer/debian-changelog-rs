@@ -2779,4 +2779,31 @@ breezy (3.3.3-1) unstable; urgency=low
             .to_string()
             .contains("Mon, 04 Sep 2023 18:13:45 -0500"));
     }
+
+    #[test]
+    fn test_parse_multiple_distributions_frozen_unstable() {
+        // Test case for https://github.com/jelmer/debian-changelog-rs/issues/93
+        // The "at" package has entries with "frozen unstable" distributions from 1998
+        const CHANGELOG: &str = r#"at (3.1.8-10) frozen unstable; urgency=high
+
+  * Suidunregister /usr/bin (closes: Bug#59421).
+
+ -- Siggy Brentrup <bsb@winnegan.de>  Mon,  3 Apr 2000 13:56:47 +0200
+"#;
+
+        let parsed = parse(CHANGELOG);
+        assert_eq!(parsed.errors(), &Vec::<String>::new());
+
+        let root = parsed.tree();
+        let entries: Vec<_> = root.iter().collect();
+        assert_eq!(entries.len(), 1);
+
+        let entry = &entries[0];
+        assert_eq!(entry.package(), Some("at".into()));
+        assert_eq!(entry.version(), Some("3.1.8-10".parse().unwrap()));
+        assert_eq!(
+            entry.distributions(),
+            Some(vec!["frozen".into(), "unstable".into()])
+        );
+    }
 }
