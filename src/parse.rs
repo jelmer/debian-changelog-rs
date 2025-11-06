@@ -339,6 +339,31 @@ fn parse(text: &str) -> Parse<ChangeLog> {
                     if self.current() == Some(IDENTIFIER) {
                         self.builder.start_node(METADATA_VALUE.into());
                         self.bump();
+                        // Handle old-style metadata values that may contain spaces and multiple tokens
+                        // e.g., "closes=53715 56047 56607"
+                        loop {
+                            match (self.current(), self.next()) {
+                                // Stop if we see a new key=value pattern (IDENTIFIER followed by EQUALS)
+                                (Some(WHITESPACE), Some(IDENTIFIER)) => {
+                                    // Look further ahead to see if there's an EQUALS after the identifier
+                                    // If there is, this is a new metadata entry, so stop here
+                                    // Otherwise, consume the whitespace and identifier as part of the value
+                                    if self.tokens.len() >= 3 {
+                                        if let Some((kind, _)) =
+                                            self.tokens.get(self.tokens.len() - 3)
+                                        {
+                                            if *kind == EQUALS {
+                                                break; // Next token starts a new metadata entry
+                                            }
+                                        }
+                                    }
+                                    self.bump(); // consume whitespace
+                                }
+                                (Some(WHITESPACE), _) => self.bump(),
+                                (Some(IDENTIFIER), _) => self.bump(),
+                                _ => break,
+                            }
+                        }
                         self.builder.finish_node();
                     } else {
                         self.error("expected metadata value".to_string());
@@ -346,6 +371,18 @@ fn parse(text: &str) -> Parse<ChangeLog> {
                         break;
                     }
                     self.builder.finish_node();
+
+                    // Skip comma separators (old-style format)
+                    self.skip_ws();
+                    if self.current() == Some(ERROR) {
+                        // Peek at the token text to see if it's a comma
+                        if let Some((_, text)) = self.tokens.last() {
+                            if text == "," {
+                                self.bump(); // consume the comma
+                                continue;
+                            }
+                        }
+                    }
                 }
             } else if self.current() == Some(NEWLINE) {
             } else {
@@ -2805,5 +2842,38 @@ breezy (3.3.3-1) unstable; urgency=low
             entry.distributions(),
             Some(vec!["frozen".into(), "unstable".into()])
         );
+    }
+
+    #[test]
+    fn test_parse_old_metadata_format_with_comma() {
+        // Test case for https://github.com/jelmer/debian-changelog-rs/issues/93
+        // The "at" package has old-style metadata with comma-separated values
+        const CHANGELOG: &str = r#"at (3.1.8-9) frozen unstable; urgency=low, closes=53715 56047 56607 55560 55514
+
+  * Added SIGCHLD handler to release zombies (closes 53715 56047 56607)
+
+ -- Siggy Brentrup <bsb@winnegan.de>  Sun, 30 Jan 2000 22:00:46 +0100
+"#;
+
+        let parsed = parse(CHANGELOG);
+
+        // This old format currently fails to parse
+        if !parsed.errors().is_empty() {
+            eprintln!("Parse errors: {:?}", parsed.errors());
+        }
+        assert_eq!(parsed.errors(), &Vec::<String>::new());
+
+        let root = parsed.tree();
+        let entries: Vec<_> = root.iter().collect();
+        assert_eq!(entries.len(), 1);
+
+        let entry = &entries[0];
+        assert_eq!(entry.package(), Some("at".into()));
+        assert_eq!(entry.version(), Some("3.1.8-9".parse().unwrap()));
+        assert_eq!(
+            entry.distributions(),
+            Some(vec!["frozen".into(), "unstable".into()])
+        );
+        assert_eq!(entry.urgency(), Some(Urgency::Low));
     }
 }
