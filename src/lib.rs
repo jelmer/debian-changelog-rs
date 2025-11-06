@@ -140,9 +140,7 @@ impl Change {
             .and_then(|token| token.parent())
             .filter(|parent| parent.kind() == SyntaxKind::ENTRY_BODY);
 
-        if let Some(first_node) = first_body_node {
-            let insert_index = first_node.index();
-
+        if let Some(_first_node) = first_body_node {
             // Collect all ENTRY_BODY nodes to remove
             let mut body_nodes_to_remove = Vec::new();
             for token in &self.detail_tokens {
@@ -979,5 +977,84 @@ breezy (3.3.2-1) unstable; urgency=low
         let updated_changes = iter_changes_by_author(&changelog);
         assert_eq!(updated_changes.len(), 1);
         assert_eq!(updated_changes[0].lines(), vec!["* New change"]);
+    }
+
+    #[test]
+    fn test_change_accessors() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  [ Alice ]
+  * Change by Alice
+
+ -- Bob <bob@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#.parse().unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        assert_eq!(changes.len(), 1);
+
+        let change = &changes[0];
+
+        // Test all accessors
+        assert_eq!(change.author(), Some("Alice"));
+        assert_eq!(change.package(), Some("breezy".to_string()));
+        assert_eq!(change.version().map(|v| v.to_string()), Some("3.3.4-1".to_string()));
+        assert_eq!(change.is_attributed(), true);
+        assert_eq!(change.lines(), vec!["* Change by Alice"]);
+
+        // Test entry accessor
+        assert_eq!(change.entry().package(), Some("breezy".to_string()));
+    }
+
+    #[test]
+    fn test_change_unattributed_accessors() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * Unattributed change
+
+ -- Bob <bob@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#.parse().unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        assert_eq!(changes.len(), 1);
+
+        let change = &changes[0];
+        assert_eq!(change.author(), None);
+        assert_eq!(change.is_attributed(), false);
+    }
+
+    #[test]
+    fn test_replace_single_line_with_multiple() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * Single line change
+
+ -- Bob <bob@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#.parse().unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        changes[0].replace_with(vec!["* First line", "* Second line", "* Third line"]);
+
+        let updated = iter_changes_by_author(&changelog);
+        assert_eq!(updated[0].lines(), vec!["* First line", "* Second line", "* Third line"]);
+    }
+
+    #[test]
+    fn test_replace_multiple_lines_with_single() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * First line
+  * Second line
+  * Third line
+
+ -- Bob <bob@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#.parse().unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        assert_eq!(changes[0].lines().len(), 3);
+
+        changes[0].replace_with(vec!["* Single replacement line"]);
+
+        let updated = iter_changes_by_author(&changelog);
+        assert_eq!(updated[0].lines(), vec!["* Single replacement line"]);
     }
 }
