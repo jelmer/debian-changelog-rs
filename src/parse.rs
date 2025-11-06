@@ -2875,5 +2875,22 @@ breezy (3.3.3-1) unstable; urgency=low
             Some(vec!["frozen".into(), "unstable".into()])
         );
         assert_eq!(entry.urgency(), Some(Urgency::Low));
+
+        // Verify we can access the "closes" metadata
+        let header = entry.header().unwrap();
+        let metadata: Vec<(String, String)> = header.metadata().collect();
+
+        // Should have both urgency and closes
+        assert_eq!(metadata.len(), 2);
+        assert!(metadata.iter().any(|(k, v)| k == "urgency" && v == "low"));
+
+        // Get the closes value and verify exact match
+        let closes_value = metadata
+            .iter()
+            .find(|(k, _)| k == "closes")
+            .map(|(_, v)| v)
+            .expect("closes metadata should exist");
+
+        assert_eq!(closes_value, "53715 56047 56607 55560 55514");
     }
 }
