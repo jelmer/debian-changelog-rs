@@ -72,6 +72,11 @@ impl Change {
         self.author.as_deref()
     }
 
+    /// Get the line numbers in the original entry where this change appears.
+    pub fn line_numbers(&self) -> &[usize] {
+        &self.line_numbers
+    }
+
     /// Get the lines of this change.
     pub fn lines(&self) -> Vec<String> {
         self.detail_tokens
@@ -112,7 +117,10 @@ impl Change {
             if let Some(parent) = token.parent() {
                 if parent.kind() == SyntaxKind::ENTRY_BODY {
                     // Check if we haven't already marked this node for removal
-                    if !body_nodes_to_remove.iter().any(|n: &SyntaxNode| n == &parent) {
+                    if !body_nodes_to_remove
+                        .iter()
+                        .any(|n: &SyntaxNode| n == &parent)
+                    {
                         body_nodes_to_remove.push(parent);
                     }
                 }
@@ -122,7 +130,9 @@ impl Change {
         // Remove the ENTRY_BODY nodes from the entry's syntax tree
         for body_node in body_nodes_to_remove {
             let index = body_node.index();
-            self.entry.syntax().splice_children(index..index + 1, vec![]);
+            self.entry
+                .syntax()
+                .splice_children(index..index + 1, vec![]);
         }
     }
 
@@ -136,7 +146,9 @@ impl Change {
         use rowan::GreenNodeBuilder;
 
         // Find the first ENTRY_BODY node to determine insertion point
-        let first_body_node = self.detail_tokens.first()
+        let first_body_node = self
+            .detail_tokens
+            .first()
             .and_then(|token| token.parent())
             .filter(|parent| parent.kind() == SyntaxKind::ENTRY_BODY);
 
@@ -146,7 +158,10 @@ impl Change {
             for token in &self.detail_tokens {
                 if let Some(parent) = token.parent() {
                     if parent.kind() == SyntaxKind::ENTRY_BODY {
-                        if !body_nodes_to_remove.iter().any(|n: &SyntaxNode| n == &parent) {
+                        if !body_nodes_to_remove
+                            .iter()
+                            .any(|n: &SyntaxNode| n == &parent)
+                        {
                             body_nodes_to_remove.push(parent);
                         }
                     }
@@ -178,7 +193,9 @@ impl Change {
                 let idx = node.index();
                 if i == 0 {
                     // For the first removal, insert the new nodes
-                    self.entry.syntax().splice_children(idx..idx + 1, new_nodes.clone());
+                    self.entry
+                        .syntax()
+                        .splice_children(idx..idx + 1, new_nodes.clone());
                 } else {
                     // For subsequent removals, just remove
                     self.entry.syntax().splice_children(idx..idx + 1, vec![]);
@@ -901,7 +918,9 @@ breezy (3.3.2-1) unstable; urgency=low
   * Unattributed change
 
  -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
-"#.parse().unwrap();
+"#
+        .parse()
+        .unwrap();
 
         let changes = iter_changes_by_author(&changelog);
         assert_eq!(changes.len(), 3);
@@ -937,7 +956,9 @@ breezy (3.3.2-1) unstable; urgency=low
   * Change by Author 2
 
  -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
-"#.parse().unwrap();
+"#
+        .parse()
+        .unwrap();
 
         let changes = iter_changes_by_author(&changelog);
         assert_eq!(changes.len(), 2);
@@ -955,7 +976,10 @@ breezy (3.3.2-1) unstable; urgency=low
 
         // Author 2's change should be replaced
         assert_eq!(updated_changes[1].author(), Some("Author 2"));
-        assert_eq!(updated_changes[1].lines(), vec!["* Updated change by Author 2", "* Another line"]);
+        assert_eq!(
+            updated_changes[1].lines(),
+            vec!["* Updated change by Author 2", "* Another line"]
+        );
     }
 
     #[test]
@@ -965,7 +989,9 @@ breezy (3.3.2-1) unstable; urgency=low
   * Old change
 
  -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
-"#.parse().unwrap();
+"#
+        .parse()
+        .unwrap();
 
         let changes = iter_changes_by_author(&changelog);
         assert_eq!(changes.len(), 1);
@@ -987,7 +1013,9 @@ breezy (3.3.2-1) unstable; urgency=low
   * Change by Alice
 
  -- Bob <bob@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
-"#.parse().unwrap();
+"#
+        .parse()
+        .unwrap();
 
         let changes = iter_changes_by_author(&changelog);
         assert_eq!(changes.len(), 1);
@@ -997,7 +1025,10 @@ breezy (3.3.2-1) unstable; urgency=low
         // Test all accessors
         assert_eq!(change.author(), Some("Alice"));
         assert_eq!(change.package(), Some("breezy".to_string()));
-        assert_eq!(change.version().map(|v| v.to_string()), Some("3.3.4-1".to_string()));
+        assert_eq!(
+            change.version().map(|v| v.to_string()),
+            Some("3.3.4-1".to_string())
+        );
         assert_eq!(change.is_attributed(), true);
         assert_eq!(change.lines(), vec!["* Change by Alice"]);
 
@@ -1012,7 +1043,9 @@ breezy (3.3.2-1) unstable; urgency=low
   * Unattributed change
 
  -- Bob <bob@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
-"#.parse().unwrap();
+"#
+        .parse()
+        .unwrap();
 
         let changes = iter_changes_by_author(&changelog);
         assert_eq!(changes.len(), 1);
@@ -1029,13 +1062,18 @@ breezy (3.3.2-1) unstable; urgency=low
   * Single line change
 
  -- Bob <bob@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
-"#.parse().unwrap();
+"#
+        .parse()
+        .unwrap();
 
         let changes = iter_changes_by_author(&changelog);
         changes[0].replace_with(vec!["* First line", "* Second line", "* Third line"]);
 
         let updated = iter_changes_by_author(&changelog);
-        assert_eq!(updated[0].lines(), vec!["* First line", "* Second line", "* Third line"]);
+        assert_eq!(
+            updated[0].lines(),
+            vec!["* First line", "* Second line", "* Third line"]
+        );
     }
 
     #[test]
@@ -1047,7 +1085,9 @@ breezy (3.3.2-1) unstable; urgency=low
   * Third line
 
  -- Bob <bob@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
-"#.parse().unwrap();
+"#
+        .parse()
+        .unwrap();
 
         let changes = iter_changes_by_author(&changelog);
         assert_eq!(changes[0].lines().len(), 3);
