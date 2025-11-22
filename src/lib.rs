@@ -128,7 +128,11 @@ impl Change {
         }
 
         // Remove the ENTRY_BODY nodes from the entry's syntax tree
-        for body_node in body_nodes_to_remove {
+        // We need to remove from highest index to lowest to avoid index shifting issues
+        let mut sorted_nodes = body_nodes_to_remove;
+        sorted_nodes.sort_by_key(|n| std::cmp::Reverse(n.index()));
+
+        for body_node in sorted_nodes {
             let index = body_node.index();
             self.entry
                 .syntax()
@@ -202,6 +206,83 @@ impl Change {
                 }
             }
         }
+    }
+
+    /// Split this change into individual bullet points.
+    ///
+    /// Each bullet point (line starting with "* ") and its continuation lines
+    /// (indented lines that follow) become a separate Change object.
+    ///
+    /// # Returns
+    /// A vector of Change objects, one per bullet point. Each Change contains:
+    /// - The same entry and author as the parent
+    /// - Subset of line_numbers for that specific bullet
+    /// - Subset of detail_tokens for that bullet and its continuation lines
+    ///
+    /// # Examples
+    /// ```
+    /// use debian_changelog::{ChangeLog, iter_changes_by_author};
+    ///
+    /// let changelog_text = r#"blah (1.0-1) unstable; urgency=low
+    ///
+    ///   * First change
+    ///   * Second change
+    ///     with continuation
+    ///
+    ///  -- Author <email@example.com>  Mon, 01 Jan 2024 00:00:00 +0000
+    /// "#;
+    ///
+    /// let changelog = ChangeLog::read_relaxed(changelog_text.as_bytes()).unwrap();
+    /// let changes = iter_changes_by_author(&changelog);
+    /// let bullets = changes[0].split_into_bullets();
+    /// assert_eq!(bullets.len(), 2);
+    /// assert_eq!(bullets[0].lines(), vec!["* First change"]);
+    /// assert_eq!(bullets[1].lines(), vec!["* Second change", "  with continuation"]);
+    /// ```
+    pub fn split_into_bullets(&self) -> Vec<Change> {
+        let mut result = Vec::new();
+        let mut current_bullet_tokens = Vec::new();
+        let mut current_bullet_line_numbers = Vec::new();
+
+        for (i, token) in self.detail_tokens.iter().enumerate() {
+            let text = token.text();
+            let line_number = self.line_numbers.get(i).copied().unwrap_or(0);
+
+            // Check if this is a new bullet point (starts with "* ")
+            if text.starts_with("* ") {
+                // If we have a previous bullet, save it
+                if !current_bullet_tokens.is_empty() {
+                    result.push(Change::new(
+                        self.entry.clone(),
+                        self.author.clone(),
+                        current_bullet_line_numbers.clone(),
+                        current_bullet_tokens.clone(),
+                    ));
+                    current_bullet_tokens.clear();
+                    current_bullet_line_numbers.clear();
+                }
+
+                // Start a new bullet
+                current_bullet_tokens.push(token.clone());
+                current_bullet_line_numbers.push(line_number);
+            } else {
+                // This is a continuation line, add to current bullet
+                current_bullet_tokens.push(token.clone());
+                current_bullet_line_numbers.push(line_number);
+            }
+        }
+
+        // Don't forget the last bullet
+        if !current_bullet_tokens.is_empty() {
+            result.push(Change::new(
+                self.entry.clone(),
+                self.author.clone(),
+                current_bullet_line_numbers,
+                current_bullet_tokens,
+            ));
+        }
+
+        result
     }
 }
 
@@ -671,19 +752,28 @@ pub fn iter_changes_by_author(changelog: &ChangeLog) -> Vec<Change> {
             })
             .collect();
 
+        // Track which tokens have been used to avoid matching duplicates to the same token
+        let mut token_index = 0;
+
         for (author, linenos, lines) in
             crate::changes::changes_by_author(changes.iter().map(|s| s.as_str()))
         {
             let author_name = author.map(|s| s.to_string());
 
             // Extract the specific DETAIL tokens for this change by matching text content
+            // We iterate through tokens in order to handle duplicate lines correctly
             let detail_tokens: Vec<SyntaxToken> = lines
                 .iter()
                 .filter_map(|line_text| {
-                    all_detail_tokens
-                        .iter()
-                        .find(|token| token.text() == *line_text)
-                        .cloned()
+                    // Find the next token matching this line's text
+                    while token_index < all_detail_tokens.len() {
+                        let token = &all_detail_tokens[token_index];
+                        token_index += 1;
+                        if token.text() == *line_text {
+                            return Some(token.clone());
+                        }
+                    }
+                    None
                 })
                 .collect();
 
@@ -1096,5 +1186,473 @@ breezy (3.3.2-1) unstable; urgency=low
 
         let updated = iter_changes_by_author(&changelog);
         assert_eq!(updated[0].lines(), vec!["* Single replacement line"]);
+    }
+
+    #[test]
+    fn test_split_into_bullets_single_line() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * First change
+  * Second change
+  * Third change
+
+ -- Bob <bob@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        assert_eq!(changes.len(), 1);
+
+        // Split the single Change into individual bullets
+        let bullets = changes[0].split_into_bullets();
+
+        assert_eq!(bullets.len(), 3);
+        assert_eq!(bullets[0].lines(), vec!["* First change"]);
+        assert_eq!(bullets[1].lines(), vec!["* Second change"]);
+        assert_eq!(bullets[2].lines(), vec!["* Third change"]);
+
+        // Each bullet should have the same package and version
+        for bullet in &bullets {
+            assert_eq!(bullet.package(), Some("breezy".to_string()));
+            assert_eq!(
+                bullet.version().map(|v| v.to_string()),
+                Some("3.3.4-1".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn test_split_into_bullets_with_continuations() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * First change
+    with a continuation line
+  * Second change
+    with multiple
+    continuation lines
+  * Third change
+
+ -- Bob <bob@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        assert_eq!(changes.len(), 1);
+
+        let bullets = changes[0].split_into_bullets();
+
+        assert_eq!(bullets.len(), 3);
+        assert_eq!(
+            bullets[0].lines(),
+            vec!["* First change", "  with a continuation line"]
+        );
+        assert_eq!(
+            bullets[1].lines(),
+            vec!["* Second change", "  with multiple", "  continuation lines"]
+        );
+        assert_eq!(bullets[2].lines(), vec!["* Third change"]);
+    }
+
+    #[test]
+    fn test_split_into_bullets_mixed() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * Single line bullet
+  * Multi-line bullet
+    with continuation
+  * Another single line
+
+ -- Bob <bob@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        let bullets = changes[0].split_into_bullets();
+
+        assert_eq!(bullets.len(), 3);
+        assert_eq!(bullets[0].lines(), vec!["* Single line bullet"]);
+        assert_eq!(
+            bullets[1].lines(),
+            vec!["* Multi-line bullet", "  with continuation"]
+        );
+        assert_eq!(bullets[2].lines(), vec!["* Another single line"]);
+    }
+
+    #[test]
+    fn test_split_into_bullets_with_author() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  [ Alice ]
+  * Change by Alice
+  * Another change by Alice
+
+  [ Bob ]
+  * Change by Bob
+
+ -- Maintainer <maint@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        assert_eq!(changes.len(), 2);
+
+        // Split Alice's changes
+        let alice_bullets = changes[0].split_into_bullets();
+        assert_eq!(alice_bullets.len(), 2);
+        assert_eq!(alice_bullets[0].lines(), vec!["* Change by Alice"]);
+        assert_eq!(alice_bullets[1].lines(), vec!["* Another change by Alice"]);
+
+        // Both bullets should preserve the author
+        for bullet in &alice_bullets {
+            assert_eq!(bullet.author(), Some("Alice"));
+        }
+
+        // Split Bob's changes
+        let bob_bullets = changes[1].split_into_bullets();
+        assert_eq!(bob_bullets.len(), 1);
+        assert_eq!(bob_bullets[0].lines(), vec!["* Change by Bob"]);
+        assert_eq!(bob_bullets[0].author(), Some("Bob"));
+    }
+
+    #[test]
+    fn test_split_into_bullets_single_bullet() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * Single bullet point
+
+ -- Bob <bob@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        let bullets = changes[0].split_into_bullets();
+
+        assert_eq!(bullets.len(), 1);
+        assert_eq!(bullets[0].lines(), vec!["* Single bullet point"]);
+    }
+
+    #[test]
+    fn test_split_into_bullets_and_remove() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * First change
+  * Duplicate change
+  * Duplicate change
+  * Last change
+
+ -- Bob <bob@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        let bullets = changes[0].split_into_bullets();
+
+        assert_eq!(bullets.len(), 4);
+
+        // Remove the second duplicate (index 2)
+        bullets[2].clone().remove();
+
+        // Re-read and verify
+        let updated_changes = iter_changes_by_author(&changelog);
+        let updated_bullets = updated_changes[0].split_into_bullets();
+
+        assert_eq!(updated_bullets.len(), 3);
+        assert_eq!(updated_bullets[0].lines(), vec!["* First change"]);
+        assert_eq!(updated_bullets[1].lines(), vec!["* Duplicate change"]);
+        assert_eq!(updated_bullets[2].lines(), vec!["* Last change"]);
+    }
+
+    #[test]
+    fn test_split_into_bullets_preserves_line_numbers() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * First change
+  * Second change
+  * Third change
+
+ -- Bob <bob@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        let bullets = changes[0].split_into_bullets();
+
+        // Each bullet should have distinct line numbers
+        assert_eq!(bullets.len(), 3);
+        assert_eq!(bullets[0].line_numbers().len(), 1);
+        assert_eq!(bullets[1].line_numbers().len(), 1);
+        assert_eq!(bullets[2].line_numbers().len(), 1);
+
+        // Line numbers should be in ascending order
+        assert!(bullets[0].line_numbers()[0] < bullets[1].line_numbers()[0]);
+        assert!(bullets[1].line_numbers()[0] < bullets[2].line_numbers()[0]);
+    }
+
+    #[test]
+    fn test_split_and_remove_from_multi_author_entry() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  [ Alice ]
+  * Change 1 by Alice
+  * Change 2 by Alice
+  * Change 3 by Alice
+
+  [ Bob ]
+  * Change 1 by Bob
+  * Change 2 by Bob
+
+  [ Charlie ]
+  * Change 1 by Charlie
+
+  * Unattributed change
+
+ -- Maintainer <maint@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        assert_eq!(changes.len(), 4); // Alice, Bob, Charlie, Unattributed
+
+        // Split Alice's changes and remove the second one
+        let alice_bullets = changes[0].split_into_bullets();
+        assert_eq!(alice_bullets.len(), 3);
+        alice_bullets[1].clone().remove(); // Remove "Change 2 by Alice"
+
+        // Re-read and verify
+        let updated_changes = iter_changes_by_author(&changelog);
+        assert_eq!(updated_changes.len(), 4);
+
+        // Alice should now have 2 changes
+        let updated_alice_bullets = updated_changes[0].split_into_bullets();
+        assert_eq!(updated_alice_bullets.len(), 2);
+        assert_eq!(
+            updated_alice_bullets[0].lines(),
+            vec!["* Change 1 by Alice"]
+        );
+        assert_eq!(
+            updated_alice_bullets[1].lines(),
+            vec!["* Change 3 by Alice"]
+        );
+        assert_eq!(updated_alice_bullets[0].author(), Some("Alice"));
+
+        // Bob should be unchanged
+        let bob_bullets = updated_changes[1].split_into_bullets();
+        assert_eq!(bob_bullets.len(), 2);
+        assert_eq!(bob_bullets[0].lines(), vec!["* Change 1 by Bob"]);
+        assert_eq!(bob_bullets[1].lines(), vec!["* Change 2 by Bob"]);
+
+        // Charlie should be unchanged
+        let charlie_bullets = updated_changes[2].split_into_bullets();
+        assert_eq!(charlie_bullets.len(), 1);
+        assert_eq!(charlie_bullets[0].lines(), vec!["* Change 1 by Charlie"]);
+
+        // Unattributed should be unchanged
+        let unattributed_bullets = updated_changes[3].split_into_bullets();
+        assert_eq!(unattributed_bullets.len(), 1);
+        assert_eq!(
+            unattributed_bullets[0].lines(),
+            vec!["* Unattributed change"]
+        );
+    }
+
+    #[test]
+    fn test_remove_multiple_bullets_from_different_authors() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  [ Alice ]
+  * Alice change 1
+  * Alice change 2
+  * Alice change 3
+
+  [ Bob ]
+  * Bob change 1
+  * Bob change 2
+  * Bob change 3
+
+ -- Maintainer <maint@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        assert_eq!(changes.len(), 2);
+
+        // Remove Alice's first and third changes
+        let alice_bullets = changes[0].split_into_bullets();
+        alice_bullets[0].clone().remove();
+        alice_bullets[2].clone().remove();
+
+        // Remove Bob's second change
+        let bob_bullets = changes[1].split_into_bullets();
+        bob_bullets[1].clone().remove();
+
+        // Re-read and verify
+        let updated_changes = iter_changes_by_author(&changelog);
+
+        let updated_alice = updated_changes[0].split_into_bullets();
+        assert_eq!(updated_alice.len(), 1);
+        assert_eq!(updated_alice[0].lines(), vec!["* Alice change 2"]);
+
+        let updated_bob = updated_changes[1].split_into_bullets();
+        assert_eq!(updated_bob.len(), 2);
+        assert_eq!(updated_bob[0].lines(), vec!["* Bob change 1"]);
+        assert_eq!(updated_bob[1].lines(), vec!["* Bob change 3"]);
+    }
+
+    #[test]
+    fn test_remove_bullet_with_continuation_from_multi_author() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  [ Alice ]
+  * Simple change by Alice
+
+  [ Bob ]
+  * Multi-line change by Bob
+    with a continuation line
+    and another continuation
+  * Simple change by Bob
+
+  [ Charlie ]
+  * Change by Charlie
+
+ -- Maintainer <maint@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        assert_eq!(changes.len(), 3);
+
+        // Remove Bob's multi-line change
+        let bob_bullets = changes[1].split_into_bullets();
+        assert_eq!(bob_bullets.len(), 2);
+        assert_eq!(
+            bob_bullets[0].lines(),
+            vec![
+                "* Multi-line change by Bob",
+                "  with a continuation line",
+                "  and another continuation"
+            ]
+        );
+        bob_bullets[0].clone().remove();
+
+        // Re-read and verify
+        let updated_changes = iter_changes_by_author(&changelog);
+
+        // Alice unchanged
+        let alice_bullets = updated_changes[0].split_into_bullets();
+        assert_eq!(alice_bullets.len(), 1);
+        assert_eq!(alice_bullets[0].lines(), vec!["* Simple change by Alice"]);
+
+        // Bob now has only the simple change
+        let updated_bob = updated_changes[1].split_into_bullets();
+        assert_eq!(updated_bob.len(), 1);
+        assert_eq!(updated_bob[0].lines(), vec!["* Simple change by Bob"]);
+
+        // Charlie unchanged
+        let charlie_bullets = updated_changes[2].split_into_bullets();
+        assert_eq!(charlie_bullets.len(), 1);
+        assert_eq!(charlie_bullets[0].lines(), vec!["* Change by Charlie"]);
+    }
+
+    #[test]
+    fn test_remove_all_bullets_from_one_author_section() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  [ Alice ]
+  * Change 1 by Alice
+  * Change 2 by Alice
+
+  [ Bob ]
+  * Change 1 by Bob
+
+ -- Maintainer <maint@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        assert_eq!(changes.len(), 2);
+
+        // Remove all of Alice's changes
+        let alice_bullets = changes[0].split_into_bullets();
+        for bullet in alice_bullets {
+            bullet.remove();
+        }
+
+        // Re-read and verify
+        let updated_changes = iter_changes_by_author(&changelog);
+
+        // Alice's section header remains but with no changes
+        // Bob's section follows with its change, so only Bob's change remains
+        assert_eq!(updated_changes.len(), 1);
+        assert_eq!(updated_changes[0].author(), Some("Bob"));
+
+        let bob_bullets = updated_changes[0].split_into_bullets();
+        assert_eq!(bob_bullets.len(), 1);
+        assert_eq!(bob_bullets[0].lines(), vec!["* Change 1 by Bob"]);
+    }
+
+    #[test]
+    fn test_remove_duplicate_from_specific_author() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  [ Alice ]
+  * New upstream release
+  * Fix typo in documentation
+  * New upstream release
+
+  [ Bob ]
+  * New upstream release
+  * Update dependencies
+
+ -- Maintainer <maint@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        assert_eq!(changes.len(), 2);
+
+        // Find and remove duplicate "New upstream release" from Alice
+        let alice_bullets = changes[0].split_into_bullets();
+        assert_eq!(alice_bullets.len(), 3);
+
+        // Verify the order before removal
+        assert_eq!(alice_bullets[0].lines(), vec!["* New upstream release"]);
+        assert_eq!(
+            alice_bullets[1].lines(),
+            vec!["* Fix typo in documentation"]
+        );
+        assert_eq!(alice_bullets[2].lines(), vec!["* New upstream release"]);
+
+        // Remove the duplicate (third item)
+        alice_bullets[2].clone().remove();
+
+        // Re-read and verify
+        let updated_changes = iter_changes_by_author(&changelog);
+
+        // Alice should now have 2 changes (first "New upstream release" and "Fix typo")
+        let updated_alice = updated_changes[0].split_into_bullets();
+        assert_eq!(updated_alice.len(), 2);
+        assert_eq!(updated_alice[0].lines(), vec!["* New upstream release"]);
+        assert_eq!(
+            updated_alice[1].lines(),
+            vec!["* Fix typo in documentation"]
+        );
+
+        // Bob should be unchanged
+        let bob_bullets = updated_changes[1].split_into_bullets();
+        assert_eq!(bob_bullets.len(), 2);
+        assert_eq!(bob_bullets[0].lines(), vec!["* New upstream release"]);
+        assert_eq!(bob_bullets[1].lines(), vec!["* Update dependencies"]);
     }
 }
