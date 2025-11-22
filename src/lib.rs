@@ -108,8 +108,13 @@ impl Change {
     /// Remove this change from its parent entry.
     ///
     /// This removes all DETAIL tokens (ENTRY_BODY nodes) associated with this change
-    /// from the syntax tree.
+    /// from the syntax tree. If this removes the last change in an author section,
+    /// the empty section header will also be removed.
     pub fn remove(self) {
+        // Store info we'll need after removal
+        let author = self.author.clone();
+        let entry = self.entry.clone();
+
         // Collect the parent ENTRY_BODY nodes that contain our detail tokens
         let mut body_nodes_to_remove = Vec::new();
 
@@ -127,6 +132,13 @@ impl Change {
             }
         }
 
+        // Find the section header node if this is an attributed change
+        let section_header = if author.is_some() && !body_nodes_to_remove.is_empty() {
+            Self::find_section_header_for_changes(&entry, &body_nodes_to_remove)
+        } else {
+            None
+        };
+
         // Remove the ENTRY_BODY nodes from the entry's syntax tree
         // We need to remove from highest index to lowest to avoid index shifting issues
         let mut sorted_nodes = body_nodes_to_remove;
@@ -134,9 +146,105 @@ impl Change {
 
         for body_node in sorted_nodes {
             let index = body_node.index();
-            self.entry
+            entry.syntax().splice_children(index..index + 1, vec![]);
+        }
+
+        // Check if section is now empty and remove header if needed
+        if let Some(header_node) = section_header {
+            Self::remove_section_header_if_empty(&entry, &header_node);
+        }
+    }
+
+    /// Find the section header that precedes the given change nodes
+    fn find_section_header_for_changes(
+        entry: &Entry,
+        change_nodes: &[SyntaxNode],
+    ) -> Option<SyntaxNode> {
+        if change_nodes.is_empty() {
+            return None;
+        }
+
+        let first_change_index = change_nodes.iter().map(|n| n.index()).min().unwrap();
+        let mut header_node = None;
+
+        for child in entry.syntax().children() {
+            for token_or_node in child.children_with_tokens() {
+                let Some(token) = token_or_node.as_token() else {
+                    continue;
+                };
+                if token.kind() != SyntaxKind::DETAIL {
+                    continue;
+                }
+
+                let Some(parent) = token.parent() else {
+                    continue;
+                };
+                if parent.kind() != SyntaxKind::ENTRY_BODY {
+                    continue;
+                }
+
+                let parent_index = parent.index();
+                if parent_index >= first_change_index {
+                    continue;
+                }
+
+                if crate::changes::extract_author_name(token.text()).is_some() {
+                    header_node = Some(parent);
+                }
+            }
+        }
+
+        header_node
+    }
+
+    /// Remove a section header if its section is now empty
+    fn remove_section_header_if_empty(entry: &Entry, header_node: &SyntaxNode) {
+        let header_index = header_node.index();
+
+        // Check if there are any bullet points after this header and before the next header
+        let mut has_bullets_in_section = false;
+
+        'outer: for child in entry.syntax().children() {
+            for token_or_node in child.children_with_tokens() {
+                let Some(token) = token_or_node.as_token() else {
+                    continue;
+                };
+                if token.kind() != SyntaxKind::DETAIL {
+                    continue;
+                }
+
+                let Some(parent) = token.parent() else {
+                    continue;
+                };
+                if parent.kind() != SyntaxKind::ENTRY_BODY {
+                    continue;
+                }
+
+                let parent_index = parent.index();
+                if parent_index <= header_index {
+                    continue;
+                }
+
+                let text = token.text();
+
+                // If we hit another section header, stop searching
+                if crate::changes::extract_author_name(text).is_some() {
+                    break 'outer;
+                }
+
+                // If we find a bullet point, section is not empty
+                if text.starts_with("* ") {
+                    has_bullets_in_section = true;
+                    break 'outer;
+                }
+            }
+        }
+
+        // Remove the header if section is empty
+        if !has_bullets_in_section {
+            entry
                 .syntax()
-                .splice_children(index..index + 1, vec![]);
+                .splice_children(header_index..header_index + 1, vec![]);
         }
     }
 
@@ -1599,6 +1707,72 @@ breezy (3.3.2-1) unstable; urgency=low
         let bob_bullets = updated_changes[0].split_into_bullets();
         assert_eq!(bob_bullets.len(), 1);
         assert_eq!(bob_bullets[0].lines(), vec!["* Change 1 by Bob"]);
+
+        // Verify the section header was removed from the changelog text
+        let changelog_text = changelog.to_string();
+        assert!(
+            !changelog_text.contains("[ Alice ]"),
+            "Alice's empty section header should be removed"
+        );
+    }
+
+    #[test]
+    fn test_remove_section_header_with_multiple_sections() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  [ Alice ]
+  * Alice's first section change
+
+  [ Bob ]
+  * Bob's change
+
+  [ Alice ]
+  * Alice's second section change 1
+  * Alice's second section change 2
+
+ -- Maintainer <maint@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        assert_eq!(changes.len(), 3);
+
+        // Remove all changes from the second Alice section only
+        let alice_second = &changes[2];
+        assert_eq!(alice_second.author(), Some("Alice"));
+
+        let alice_second_bullets = alice_second.split_into_bullets();
+        assert_eq!(alice_second_bullets.len(), 2);
+
+        // Remove all bullets from the second Alice section
+        for bullet in alice_second_bullets {
+            bullet.remove();
+        }
+
+        // Re-read and verify
+        let updated_changes = iter_changes_by_author(&changelog);
+
+        // Should now only have Alice's first section and Bob's section
+        assert_eq!(updated_changes.len(), 2);
+        assert_eq!(updated_changes[0].author(), Some("Alice"));
+        assert_eq!(updated_changes[1].author(), Some("Bob"));
+
+        // Verify the first Alice section is intact
+        let alice_first = updated_changes[0].split_into_bullets();
+        assert_eq!(alice_first.len(), 1);
+        assert_eq!(
+            alice_first[0].lines(),
+            vec!["* Alice's first section change"]
+        );
+
+        // Verify the changelog text - second Alice header should be gone
+        let changelog_text = changelog.to_string();
+        let alice_header_count = changelog_text.matches("[ Alice ]").count();
+        assert_eq!(
+            alice_header_count, 1,
+            "Should only have one Alice section header remaining"
+        );
     }
 
     #[test]
