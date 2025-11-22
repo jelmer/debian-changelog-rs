@@ -96,7 +96,7 @@ dependencies = [
 
 [[package]]
 name = "debian-changelog"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "chrono",
  "debversion",
