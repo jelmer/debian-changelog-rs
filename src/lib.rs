@@ -113,7 +113,6 @@ impl Change {
     pub fn remove(self) {
         // Store info we'll need after removal
         let author = self.author.clone();
-        let entry = self.entry.clone();
 
         // Collect the parent ENTRY_BODY nodes that contain our detail tokens
         let mut body_nodes_to_remove = Vec::new();
@@ -133,8 +132,10 @@ impl Change {
         }
 
         // Find the section header node if this is an attributed change
-        let section_header = if author.is_some() && !body_nodes_to_remove.is_empty() {
-            Self::find_section_header_for_changes(&entry, &body_nodes_to_remove)
+        // and capture its index BEFORE we remove any nodes
+        let section_header_index = if author.is_some() && !body_nodes_to_remove.is_empty() {
+            Self::find_section_header_for_changes(&self.entry, &body_nodes_to_remove)
+                .map(|node| node.index())
         } else {
             None
         };
@@ -144,14 +145,27 @@ impl Change {
         let mut sorted_nodes = body_nodes_to_remove;
         sorted_nodes.sort_by_key(|n| std::cmp::Reverse(n.index()));
 
-        for body_node in sorted_nodes {
+        for body_node in &sorted_nodes {
             let index = body_node.index();
-            entry.syntax().splice_children(index..index + 1, vec![]);
+            self.entry
+                .syntax()
+                .splice_children(index..index + 1, vec![]);
         }
 
         // Check if section is now empty and remove header if needed
-        if let Some(header_node) = section_header {
-            Self::remove_section_header_if_empty(&entry, &header_node);
+        // After removing bullets, we need to adjust the header index based on how many
+        // nodes were removed before it
+        if let Some(original_header_idx) = section_header_index {
+            // Count how many nodes we removed that were before the header
+            let nodes_removed_before_header = sorted_nodes
+                .iter()
+                .filter(|n| n.index() < original_header_idx)
+                .count();
+
+            // Adjust the header index
+            let adjusted_header_idx = original_header_idx - nodes_removed_before_header;
+
+            Self::remove_section_header_if_empty_at_index(&self.entry, adjusted_header_idx);
         }
     }
 
@@ -198,9 +212,7 @@ impl Change {
     }
 
     /// Remove a section header if its section is now empty
-    fn remove_section_header_if_empty(entry: &Entry, header_node: &SyntaxNode) {
-        let header_index = header_node.index();
-
+    fn remove_section_header_if_empty_at_index(entry: &Entry, header_index: usize) {
         // Check if there are any bullet points after this header and before the next header
         let mut has_bullets_in_section = false;
 
@@ -226,7 +238,6 @@ impl Change {
                 }
 
                 let text = token.text();
-
                 // If we hit another section header, stop searching
                 if crate::changes::extract_author_name(text).is_some() {
                     break 'outer;
@@ -242,9 +253,22 @@ impl Change {
 
         // Remove the header if section is empty
         if !has_bullets_in_section {
-            entry
-                .syntax()
-                .splice_children(header_index..header_index + 1, vec![]);
+            // Also check if there's an EMPTY_LINE node before the header that should be removed
+            let mut start_index = header_index;
+            if header_index > 0 {
+                if let Some(prev_sibling) = entry.syntax().children().nth(header_index - 1) {
+                    if prev_sibling.kind() == SyntaxKind::EMPTY_LINE {
+                        start_index = header_index - 1;
+                    }
+                }
+            }
+
+            // Important: rowan's splice_children iterates and detaches nodes in order.
+            // When a node is detached, it changes the tree immediately, which can cause
+            // the iteration to skip nodes. Removing in reverse order avoids this issue.
+            for idx in (start_index..=header_index).rev() {
+                entry.syntax().splice_children(idx..idx + 1, vec![]);
+            }
         }
     }
 
@@ -269,13 +293,12 @@ impl Change {
             let mut body_nodes_to_remove = Vec::new();
             for token in &self.detail_tokens {
                 if let Some(parent) = token.parent() {
-                    if parent.kind() == SyntaxKind::ENTRY_BODY {
-                        if !body_nodes_to_remove
+                    if parent.kind() == SyntaxKind::ENTRY_BODY
+                        && !body_nodes_to_remove
                             .iter()
                             .any(|n: &SyntaxNode| n == &parent)
-                        {
-                            body_nodes_to_remove.push(parent);
-                        }
+                    {
+                        body_nodes_to_remove.push(parent);
                     }
                 }
             }
@@ -825,7 +848,7 @@ pub fn iter_entries_by_author(
             .unwrap_or_else(|| "unknown@unknown".to_string());
         let key = (maintainer_name, maintainer_email);
 
-        grouped.entry(key).or_insert_with(Vec::new).push(entry);
+        grouped.entry(key).or_default().push(entry);
     }
 
     grouped
@@ -1828,5 +1851,58 @@ breezy (3.3.2-1) unstable; urgency=low
         assert_eq!(bob_bullets.len(), 2);
         assert_eq!(bob_bullets[0].lines(), vec!["* New upstream release"]);
         assert_eq!(bob_bullets[1].lines(), vec!["* Update dependencies"]);
+    }
+
+    #[test]
+    fn test_remove_empty_section_headers_and_blank_lines() {
+        // Test that when all bullets are removed from a section, the section header
+        // and its preceding blank line are also removed
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  [ Alice ]
+  * Change 1 by Alice
+  * Change 2 by Alice
+
+  [ Bob ]
+  * Change 1 by Bob
+
+ -- Maintainer <maint@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        assert_eq!(changes.len(), 2);
+
+        // Remove all of Alice's changes
+        let alice_bullets = changes[0].split_into_bullets();
+        for bullet in alice_bullets {
+            bullet.remove();
+        }
+
+        // Verify Alice's section is completely gone
+        let updated_changes = iter_changes_by_author(&changelog);
+        assert_eq!(updated_changes.len(), 1);
+        assert_eq!(updated_changes[0].author(), Some("Bob"));
+
+        // Verify the changelog text has no Alice header or extra blank lines
+        let changelog_text = changelog.to_string();
+        assert!(!changelog_text.contains("[ Alice ]"));
+
+        // Count blank lines before signature - should be exactly 1
+        let lines: Vec<&str> = changelog_text.lines().collect();
+        let sig_idx = lines.iter().position(|l| l.starts_with(" --")).unwrap();
+        let mut blank_count = 0;
+        for i in (0..sig_idx).rev() {
+            if lines[i].trim().is_empty() {
+                blank_count += 1;
+            } else {
+                break;
+            }
+        }
+        assert_eq!(
+            blank_count, 1,
+            "Should have exactly 1 blank line before signature"
+        );
     }
 }
