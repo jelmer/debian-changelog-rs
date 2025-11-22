@@ -52,7 +52,8 @@ fn changes_sections<'a>(
             continue;
         }
 
-        if let Some((_, author)) = regex_captures!(r"^\[ (.*) \]\s*$", line) {
+        // Check for author section header
+        if let Some(author) = extract_author_name(line) {
             if !change.is_empty() {
                 section.changes.push(change);
                 change = Vec::new();
@@ -309,6 +310,38 @@ mod format_section_title_tests {
     #[test]
     fn test() {
         assert_eq!(super::format_section_title("foo"), "[ foo ]");
+    }
+}
+
+/// Extract the author name from an author section header.
+///
+/// Returns `Some(author)` if the line is an author section header,
+/// or `None` if it's not.
+///
+/// # Example
+///
+/// ```
+/// assert_eq!(debian_changelog::changes::extract_author_name("[ Alice ]"), Some("Alice"));
+/// assert_eq!(debian_changelog::changes::extract_author_name("  [ Bob Smith ]  "), Some("Bob Smith"));
+/// assert_eq!(debian_changelog::changes::extract_author_name("* Change line"), None);
+/// ```
+pub fn extract_author_name(line: &str) -> Option<&str> {
+    regex_captures!(r"^\s*\[\s*(.*?)\s*\]\s*$", line).map(|(_, author)| author)
+}
+
+#[cfg(test)]
+mod extract_author_name_tests {
+    #[test]
+    fn test() {
+        assert_eq!(super::extract_author_name("[ Alice ]"), Some("Alice"));
+        assert_eq!(super::extract_author_name("  [ Bob ]  "), Some("Bob"));
+        assert_eq!(
+            super::extract_author_name("[ Multi Word Name ]"),
+            Some("Multi Word Name")
+        );
+        assert_eq!(super::extract_author_name("* Change line"), None);
+        assert_eq!(super::extract_author_name("Regular text"), None);
+        assert_eq!(super::extract_author_name(""), None);
     }
 }
 
