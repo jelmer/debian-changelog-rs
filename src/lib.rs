@@ -145,8 +145,26 @@ impl Change {
         let mut sorted_nodes = body_nodes_to_remove;
         sorted_nodes.sort_by_key(|n| std::cmp::Reverse(n.index()));
 
+        // Track which indices to remove (ENTRY_BODY nodes and trailing EMPTY_LINE nodes)
+        let mut indices_to_remove = Vec::new();
+        let children: Vec<_> = self.entry.syntax().children().collect();
+
         for body_node in &sorted_nodes {
             let index = body_node.index();
+            indices_to_remove.push(index);
+
+            // Remove trailing EMPTY_LINE if it exists and would create consecutive blanks
+            if Self::should_remove_trailing_empty(&children, index) {
+                indices_to_remove.push(index + 1);
+            }
+        }
+
+        // Sort indices in reverse order and remove duplicates
+        indices_to_remove.sort_by_key(|&i| std::cmp::Reverse(i));
+        indices_to_remove.dedup();
+
+        // Remove the nodes
+        for index in indices_to_remove {
             self.entry
                 .syntax()
                 .splice_children(index..index + 1, vec![]);
@@ -167,6 +185,80 @@ impl Change {
 
             Self::remove_section_header_if_empty_at_index(&self.entry, adjusted_header_idx);
         }
+    }
+
+    /// Check if a node is a section header (e.g., "[ Author Name ]")
+    fn is_section_header(node: &SyntaxNode) -> bool {
+        if node.kind() != SyntaxKind::ENTRY_BODY {
+            return false;
+        }
+
+        for token in node.descendants_with_tokens() {
+            if let Some(token) = token.as_token() {
+                if token.kind() == SyntaxKind::DETAIL
+                    && crate::changes::extract_author_name(token.text()).is_some()
+                {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Check if the trailing EMPTY_LINE after an entry should be removed
+    /// Returns true if removing it would prevent consecutive blank lines
+    fn should_remove_trailing_empty(children: &[SyntaxNode], entry_index: usize) -> bool {
+        // Check if there's a trailing EMPTY_LINE
+        let has_trailing_empty = children
+            .get(entry_index + 1)
+            .is_some_and(|n| n.kind() == SyntaxKind::EMPTY_LINE);
+
+        if !has_trailing_empty {
+            return false;
+        }
+
+        // Remove if there's already an EMPTY_LINE before (would create consecutive blanks)
+        let has_preceding_empty = entry_index > 0
+            && children
+                .get(entry_index - 1)
+                .is_some_and(|n| n.kind() == SyntaxKind::EMPTY_LINE);
+
+        if has_preceding_empty {
+            return true;
+        }
+
+        // Remove if what follows would create consecutive blanks or be a section header
+        match children.get(entry_index + 2) {
+            Some(node) if node.kind() == SyntaxKind::EMPTY_LINE => true,
+            Some(node) if Self::is_section_header(node) => true,
+            _ => false,
+        }
+    }
+
+    /// Check if the preceding EMPTY_LINE before a section header should be removed
+    /// Preserves the blank line if it's the first one after the entry header
+    fn should_remove_preceding_empty(children: &[SyntaxNode], header_index: usize) -> bool {
+        if header_index == 0 {
+            return false;
+        }
+
+        // Check if there's a preceding EMPTY_LINE
+        let has_preceding_empty = children
+            .get(header_index - 1)
+            .is_some_and(|n| n.kind() == SyntaxKind::EMPTY_LINE);
+
+        if !has_preceding_empty {
+            return false;
+        }
+
+        // Don't remove if it's the first blank line after the entry header
+        let is_first_blank_after_header = header_index >= 2
+            && children
+                .get(header_index - 2)
+                .is_some_and(|n| n.kind() == SyntaxKind::ENTRY_HEADER);
+
+        !is_first_blank_after_header
     }
 
     /// Find the section header that precedes the given change nodes
@@ -253,15 +345,15 @@ impl Change {
 
         // Remove the header if section is empty
         if !has_bullets_in_section {
-            // Also check if there's an EMPTY_LINE node before the header that should be removed
-            let mut start_index = header_index;
-            if header_index > 0 {
-                if let Some(prev_sibling) = entry.syntax().children().nth(header_index - 1) {
-                    if prev_sibling.kind() == SyntaxKind::EMPTY_LINE {
-                        start_index = header_index - 1;
-                    }
-                }
-            }
+            let children: Vec<_> = entry.syntax().children().collect();
+
+            // Determine if we should also remove the preceding EMPTY_LINE
+            // (but preserve the blank line right after the entry header)
+            let start_index = if Self::should_remove_preceding_empty(&children, header_index) {
+                header_index - 1
+            } else {
+                header_index
+            };
 
             // Important: rowan's splice_children iterates and detaches nodes in order.
             // When a node is detached, it changes the tree immediately, which can cause
@@ -1903,6 +1995,233 @@ breezy (3.3.2-1) unstable; urgency=low
         assert_eq!(
             blank_count, 1,
             "Should have exactly 1 blank line before signature"
+        );
+    }
+
+    #[test]
+    fn test_remove_first_entry_before_author_section() {
+        // Test that when removing the first entry before an author section,
+        // the extra newline is properly removed
+        let changelog: ChangeLog = r#"lintian-brush (0.1-2) UNRELEASED; urgency=medium
+
+  * Team upload.
+
+  [ Jelmer Vernooĳ ]
+  * blah
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Fri, 23 Nov 2018 14:00:02 +0000
+
+lintian-brush (0.1-1) unstable; urgency=medium
+
+  * Initial release. (Closes: #XXXXXX)
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Sun, 28 Oct 2018 00:09:52 +0000
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+
+        // Find and remove the "Team upload" entry (should be the first one, unattributed)
+        let team_upload_change = changes
+            .iter()
+            .find(|c| c.lines().iter().any(|l| l.contains("Team upload")))
+            .unwrap();
+
+        team_upload_change.clone().remove();
+
+        let expected = r#"lintian-brush (0.1-2) UNRELEASED; urgency=medium
+
+  [ Jelmer Vernooĳ ]
+  * blah
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Fri, 23 Nov 2018 14:00:02 +0000
+
+lintian-brush (0.1-1) unstable; urgency=medium
+
+  * Initial release. (Closes: #XXXXXX)
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Sun, 28 Oct 2018 00:09:52 +0000
+"#;
+
+        assert_eq!(changelog.to_string(), expected);
+    }
+
+    // Helper function for remove tests to reduce repetition
+    // Splits changes into individual bullets before applying filter
+    fn test_remove_change(input: &str, change_filter: impl Fn(&Change) -> bool, expected: &str) {
+        let changelog: ChangeLog = input.parse().unwrap();
+        let changes = iter_changes_by_author(&changelog);
+
+        // Split all changes into individual bullets
+        let mut all_bullets = Vec::new();
+        for change in changes {
+            all_bullets.extend(change.split_into_bullets());
+        }
+
+        let change = all_bullets.iter().find(|c| change_filter(c)).unwrap();
+        change.clone().remove();
+        assert_eq!(changelog.to_string(), expected);
+    }
+
+    #[test]
+    fn test_remove_entry_followed_by_regular_bullet() {
+        // Empty line should be preserved when followed by a regular bullet, not a section header
+        test_remove_change(
+            r#"lintian-brush (0.1-2) UNRELEASED; urgency=medium
+
+  * First change.
+
+  * Second change.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Fri, 23 Nov 2018 14:00:02 +0000
+"#,
+            |c| c.lines().iter().any(|l| l.contains("First change")),
+            r#"lintian-brush (0.1-2) UNRELEASED; urgency=medium
+
+  * Second change.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Fri, 23 Nov 2018 14:00:02 +0000
+"#,
+        );
+    }
+
+    #[test]
+    fn test_remove_entry_not_followed_by_empty_line() {
+        // No trailing empty line to remove
+        test_remove_change(
+            r#"lintian-brush (0.1-2) UNRELEASED; urgency=medium
+
+  * First change.
+  * Second change.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Fri, 23 Nov 2018 14:00:02 +0000
+"#,
+            |c| c.lines().iter().any(|l| l.contains("First change")),
+            r#"lintian-brush (0.1-2) UNRELEASED; urgency=medium
+
+  * Second change.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Fri, 23 Nov 2018 14:00:02 +0000
+"#,
+        );
+    }
+
+    #[test]
+    fn test_remove_only_entry() {
+        // Empty line before footer should be preserved
+        test_remove_change(
+            r#"lintian-brush (0.1-2) UNRELEASED; urgency=medium
+
+  * Only change.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Fri, 23 Nov 2018 14:00:02 +0000
+"#,
+            |c| c.lines().iter().any(|l| l.contains("Only change")),
+            r#"lintian-brush (0.1-2) UNRELEASED; urgency=medium
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Fri, 23 Nov 2018 14:00:02 +0000
+"#,
+        );
+    }
+
+    #[test]
+    fn test_remove_middle_entry_between_bullets() {
+        // Empty lines around remaining bullets should be preserved
+        test_remove_change(
+            r#"lintian-brush (0.1-2) UNRELEASED; urgency=medium
+
+  * First change.
+
+  * Middle change.
+
+  * Last change.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Fri, 23 Nov 2018 14:00:02 +0000
+"#,
+            |c| c.lines().iter().any(|l| l.contains("Middle change")),
+            r#"lintian-brush (0.1-2) UNRELEASED; urgency=medium
+
+  * First change.
+
+  * Last change.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Fri, 23 Nov 2018 14:00:02 +0000
+"#,
+        );
+    }
+
+    #[test]
+    fn test_remove_entry_before_multiple_section_headers() {
+        // Empty line before first section header should be removed
+        test_remove_change(
+            r#"lintian-brush (0.1-2) UNRELEASED; urgency=medium
+
+  * Team upload.
+
+  [ Author One ]
+  * Change by author one.
+
+  [ Author Two ]
+  * Change by author two.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Fri, 23 Nov 2018 14:00:02 +0000
+"#,
+            |c| c.lines().iter().any(|l| l.contains("Team upload")),
+            r#"lintian-brush (0.1-2) UNRELEASED; urgency=medium
+
+  [ Author One ]
+  * Change by author one.
+
+  [ Author Two ]
+  * Change by author two.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Fri, 23 Nov 2018 14:00:02 +0000
+"#,
+        );
+    }
+
+    #[test]
+    fn test_remove_first_of_two_section_headers() {
+        // Empty line before remaining section should be preserved
+        test_remove_change(
+            r#"lintian-brush (0.1-2) UNRELEASED; urgency=medium
+
+  [ Author One ]
+  * Change by author one.
+
+  [ Author Two ]
+  * Change by author two.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Fri, 23 Nov 2018 14:00:02 +0000
+"#,
+            |c| c.author() == Some("Author One"),
+            r#"lintian-brush (0.1-2) UNRELEASED; urgency=medium
+
+  [ Author Two ]
+  * Change by author two.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Fri, 23 Nov 2018 14:00:02 +0000
+"#,
+        );
+    }
+
+    #[test]
+    fn test_remove_last_entry_no_empty_line_follows() {
+        // Edge case: last entry with no trailing empty before footer
+        test_remove_change(
+            r#"lintian-brush (0.1-2) UNRELEASED; urgency=medium
+
+  * First change.
+  * Last change.
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Fri, 23 Nov 2018 14:00:02 +0000
+"#,
+            |c| c.lines().iter().any(|l| l.contains("Last change")),
+            r#"lintian-brush (0.1-2) UNRELEASED; urgency=medium
+
+  * First change.
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Fri, 23 Nov 2018 14:00:02 +0000
+"#,
         );
     }
 }
