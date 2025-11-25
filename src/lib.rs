@@ -2224,4 +2224,175 @@ lintian-brush (0.1-1) unstable; urgency=medium
 "#,
         );
     }
+
+    #[test]
+    fn test_remove_first_unattributed_before_section_exact() {
+        // Exact reproduction of the lintian-brush test case
+        // Using the exact sequence: iter_changes_by_author -> split_into_bullets -> remove
+        let changelog: ChangeLog = r#"lintian-brush (0.1-2) UNRELEASED; urgency=medium
+
+  * Team upload.
+
+  [ Jelmer Vernooĳ ]
+  * blah
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Fri, 23 Nov 2018 14:00:02 +0000
+"#
+        .parse()
+        .unwrap();
+
+        // Exact sequence from lintian-brush: iter_changes_by_author -> split_into_bullets -> remove
+        let changes = iter_changes_by_author(&changelog);
+        let team_upload_change = changes
+            .iter()
+            .find(|c| c.author().is_none() && c.lines().iter().any(|l| l.contains("Team upload")))
+            .unwrap();
+
+        let bullets = team_upload_change.split_into_bullets();
+        bullets[0].clone().remove();
+
+        let result = changelog.to_string();
+
+        // Should have exactly one blank line after header, not two
+        let expected = r#"lintian-brush (0.1-2) UNRELEASED; urgency=medium
+
+  [ Jelmer Vernooĳ ]
+  * blah
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Fri, 23 Nov 2018 14:00:02 +0000
+"#;
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_replace_with_preserves_first_blank_line() {
+        // Test that replace_with preserves the blank line after the entry header
+        // This reproduces the issue from debian-changelog-line-too-long/subitem test
+        let changelog: ChangeLog = r#"blah (2.6.0) unstable; urgency=medium
+
+  * New upstream release.
+   * Fix blocks/blockedby of archived bugs (Closes: #XXXXXXX). Thanks to somebody who fixed it.
+
+ -- Joe Example <joe@example.com>  Mon, 26 Feb 2018 11:31:48 -0800
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+
+        // Replace all changes with wrapped version
+        changes[0].replace_with(vec![
+            "* New upstream release.",
+            " * Fix blocks/blockedby of archived bugs (Closes: #XXXXXXX). Thanks to",
+            "   somebody who fixed it.",
+        ]);
+
+        let result = changelog.to_string();
+
+        // The blank line after the header should be preserved
+        let expected = r#"blah (2.6.0) unstable; urgency=medium
+
+  * New upstream release.
+   * Fix blocks/blockedby of archived bugs (Closes: #XXXXXXX). Thanks to
+     somebody who fixed it.
+
+ -- Joe Example <joe@example.com>  Mon, 26 Feb 2018 11:31:48 -0800
+"#;
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_parse_serialize_preserves_blank_line() {
+        // Test that simply parsing and serializing preserves the blank line
+        let input = r#"blah (2.6.0) unstable; urgency=medium
+
+  * New upstream release.
+   * Fix blocks/blockedby of archived bugs (Closes: #XXXXXXX). Thanks to somebody who fixed it.
+
+ -- Joe Example <joe@example.com>  Mon, 26 Feb 2018 11:31:48 -0800
+"#;
+
+        let changelog: ChangeLog = input.parse().unwrap();
+        let output = changelog.to_string();
+
+        assert_eq!(output, input, "Parse/serialize should not modify changelog");
+    }
+
+    #[test]
+    fn test_replace_with_first_entry_preserves_blank() {
+        // Simulate what a Rust line-too-long fixer would do:
+        // Replace the changes in the first entry with wrapped versions
+        let changelog: ChangeLog = r#"blah (2.6.0) unstable; urgency=medium
+
+  * New upstream release.
+   * Fix blocks/blockedby of archived bugs (Closes: #XXXXXXX). Thanks to somebody who fixed it.
+
+ -- Joe Example <joe@example.com>  Mon, 26 Feb 2018 11:31:48 -0800
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        assert_eq!(changes.len(), 1);
+
+        // Replace with wrapped version (what the fixer would do)
+        changes[0].replace_with(vec![
+            "* New upstream release.",
+            " * Fix blocks/blockedby of archived bugs (Closes: #XXXXXXX). Thanks to",
+            "   somebody who fixed it.",
+        ]);
+
+        let result = changelog.to_string();
+
+        // The blank line after header MUST be preserved
+        let expected = r#"blah (2.6.0) unstable; urgency=medium
+
+  * New upstream release.
+   * Fix blocks/blockedby of archived bugs (Closes: #XXXXXXX). Thanks to
+     somebody who fixed it.
+
+ -- Joe Example <joe@example.com>  Mon, 26 Feb 2018 11:31:48 -0800
+"#;
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_pop_append_preserves_first_blank() {
+        // Test the exact pattern used by the Rust line-too-long fixer:
+        // pop all lines, then append wrapped ones
+        let changelog: ChangeLog = r#"blah (2.6.0) unstable; urgency=medium
+
+  * New upstream release.
+   * Fix blocks/blockedby of archived bugs (Closes: #XXXXXXX). Thanks to somebody who fixed it.
+
+ -- Joe Example <joe@example.com>  Mon, 26 Feb 2018 11:31:48 -0800
+"#
+        .parse()
+        .unwrap();
+
+        let entry = changelog.iter().next().unwrap();
+
+        // Pop all change lines (simulating the fixer)
+        while entry.pop_change_line().is_some() {}
+
+        // Append wrapped lines
+        entry.append_change_line("* New upstream release.");
+        entry.append_change_line(
+            " * Fix blocks/blockedby of archived bugs (Closes: #XXXXXXX). Thanks to",
+        );
+        entry.append_change_line("   somebody who fixed it.");
+
+        let result = changelog.to_string();
+
+        // The blank line after header MUST be preserved
+        let expected = r#"blah (2.6.0) unstable; urgency=medium
+
+  * New upstream release.
+   * Fix blocks/blockedby of archived bugs (Closes: #XXXXXXX). Thanks to
+     somebody who fixed it.
+
+ -- Joe Example <joe@example.com>  Mon, 26 Feb 2018 11:31:48 -0800
+"#;
+        assert_eq!(result, expected);
+    }
 }
