@@ -1854,7 +1854,19 @@ impl Entry {
             .children()
             .filter(|n| n.kind() == ENTRY_BODY)
             .last()
-            .unwrap_or_else(|| self.0.children().next().unwrap());
+            .unwrap_or_else(|| {
+                // No ENTRY_BODY nodes exist. Insert after the EMPTY_LINE that follows
+                // the ENTRY_HEADER (if it exists), to preserve required blank line.
+                let children: Vec<_> = self.0.children().collect();
+                if children.len() >= 2
+                    && children[0].kind() == ENTRY_HEADER
+                    && children[1].kind() == EMPTY_LINE
+                {
+                    children[1].clone()
+                } else {
+                    children[0].clone()
+                }
+            });
 
         let syntax = SyntaxNode::new_root_mut(builder.finish()).into();
         self.0
