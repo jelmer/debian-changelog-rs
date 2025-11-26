@@ -41,8 +41,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let file = std::fs::File::open("debian/changelog")?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
-    let changelog: debian_changelog::ChangeLog = contents.parse()?;
-    changelog.auto_add_change(
+    let mut changelog: debian_changelog::ChangeLog = contents.parse()?;
+    changelog.try_auto_add_change(
         &["* Make a change"],
         (
             "Jelmer Vernooĳ".to_string(),

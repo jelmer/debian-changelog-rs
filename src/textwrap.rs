@@ -26,9 +26,7 @@ fn can_break_word(line: &str, pos: usize) -> bool {
 
     // Pattern: "Closes: #" - don't break between "Closes:" and "#"
     // or between ":" and " #"
-    if pos >= 7
-        && &line[pos.saturating_sub(8)..pos] == "Closes: "
-        && line[pos..].starts_with(" #")
+    if pos >= 7 && &line[pos.saturating_sub(8)..pos] == "Closes: " && line[pos..].starts_with(" #")
     {
         // Don't break right after "Closes: " if followed by "#"
         return false;
@@ -497,7 +495,7 @@ fn rewrap_change<'a>(change: &[&'a str], width: Option<usize>) -> Result<Vec<Cow
 /// Rewrap lines from an iterator of changes
 ///
 /// Returns a Result containing the rewrapped lines or an error if rewrapping fails.
-pub fn rewrap_changes<'a>(
+pub fn try_rewrap_changes<'a>(
     changes: impl Iterator<Item = &'a str>,
 ) -> Result<Vec<Cow<'a, str>>, Error> {
     let mut change = Vec::new();
@@ -526,6 +524,25 @@ pub fn rewrap_changes<'a>(
         ret.extend(rewrap_change(change.as_slice(), None)?);
     }
     Ok(ret)
+}
+
+/// Rewrap lines from an iterator of changes
+///
+/// # Deprecated
+///
+/// This function panics on errors. Use [`try_rewrap_changes`] instead for proper error handling.
+///
+/// # Panics
+///
+/// Panics if rewrapping fails (e.g., due to invalid formatting).
+#[deprecated(
+    since = "0.2.10",
+    note = "Use try_rewrap_changes for proper error handling"
+)]
+pub fn rewrap_changes<'a>(
+    changes: impl Iterator<Item = &'a str>,
+) -> impl Iterator<Item = Cow<'a, str>> {
+    try_rewrap_changes(changes).unwrap().into_iter()
 }
 
 #[cfg(test)]
@@ -592,7 +609,7 @@ mod rewrap_tests {
 
 #[cfg(test)]
 mod rewrap_changes_tests {
-    use super::rewrap_changes;
+    use super::try_rewrap_changes;
 
     /// Test that long unbreakable lines (e.g., URLs) don't cause errors
     #[test]
@@ -602,7 +619,7 @@ mod rewrap_changes_tests {
             "    https://www.example.com/this/is/a/very/long/url/that/can/not/be/broken/because/it/is/longer/than/80/characters.",
         ];
 
-        let result = rewrap_changes(changes.into_iter());
+        let result = try_rewrap_changes(changes.into_iter());
         assert!(result.is_ok(), "Should handle long URLs without error");
 
         let lines = result.unwrap();
@@ -623,7 +640,7 @@ mod rewrap_changes_tests {
             "  * Provide informative error message when unarchive fails because the bug is not archived.",
         ];
 
-        let result = rewrap_changes(changes.into_iter());
+        let result = try_rewrap_changes(changes.into_iter());
         assert!(result.is_ok(), "Should wrap successfully");
 
         let lines = result.unwrap();
@@ -645,7 +662,7 @@ mod rewrap_changes_tests {
             "  * Fix blocks/blockedby of archived bugs and more blah blah blah bl (Closes: #XXXXXXX).",
         ];
 
-        let result = rewrap_changes(changes.into_iter());
+        let result = try_rewrap_changes(changes.into_iter());
         assert!(result.is_ok(), "Should wrap successfully");
 
         let lines = result.unwrap();
@@ -669,7 +686,7 @@ mod rewrap_changes_tests {
             "    - Another sub-item",
         ];
 
-        let result = rewrap_changes(changes.into_iter());
+        let result = try_rewrap_changes(changes.into_iter());
         assert!(result.is_ok(), "Should handle nested indentation");
 
         let lines = result.unwrap();
@@ -690,7 +707,7 @@ mod rewrap_changes_tests {
     fn test_empty_lines() {
         let changes = vec!["  * First change", "", "  * Second change"];
 
-        let result = rewrap_changes(changes.into_iter());
+        let result = try_rewrap_changes(changes.into_iter());
         assert!(result.is_ok(), "Should handle empty lines");
 
         let lines = result.unwrap();

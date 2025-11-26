@@ -8,7 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut contents = String::new();
     gz.read_to_string(&mut contents)?;
     let mut changelog: debian_changelog::ChangeLog = contents.parse()?;
-    changelog.auto_add_change(
+    changelog.try_auto_add_change(
         &["* Make a change"],
         (
             "Jelmer Vernooĳ".to_string(),

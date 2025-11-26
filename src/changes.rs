@@ -349,14 +349,16 @@ mod extract_author_name_tests {
 ///
 /// This will add a new section for the author if there are no sections yet.
 ///
+/// Returns an error if text rewrapping fails.
+///
 /// # Example
 ///
 /// ```
 /// let mut changes = vec![];
-/// debian_changelog::changes::add_change_for_author(&mut changes, "Author 1", vec!["* Change 1"], None);
+/// debian_changelog::changes::try_add_change_for_author(&mut changes, "Author 1", vec!["* Change 1"], None);
 /// assert_eq!(changes, vec!["* Change 1"]);
 /// ```
-pub fn add_change_for_author(
+pub fn try_add_change_for_author(
     changes: &mut Vec<String>,
     author_name: &str,
     change: Vec<&str>,
@@ -386,11 +388,43 @@ pub fn add_change_for_author(
     }
 
     changes.extend(
-        crate::textwrap::rewrap_changes(change.into_iter())?
+        crate::textwrap::try_rewrap_changes(change.into_iter())?
             .iter()
             .map(|s| s.to_string()),
     );
     Ok(())
+}
+
+/// Add a change to the list of changes, attributed to a specific author.
+///
+/// This will add a new section for the author if there are no sections yet.
+///
+/// # Deprecated
+///
+/// This function panics on errors. Use [`try_add_change_for_author`] instead for proper error handling.
+///
+/// # Panics
+///
+/// Panics if text rewrapping fails.
+///
+/// # Example
+///
+/// ```
+/// let mut changes = vec![];
+/// debian_changelog::changes::add_change_for_author(&mut changes, "Author 1", vec!["* Change 1"], None);
+/// assert_eq!(changes, vec!["* Change 1"]);
+/// ```
+#[deprecated(
+    since = "0.2.10",
+    note = "Use try_add_change_for_author for proper error handling"
+)]
+pub fn add_change_for_author(
+    changes: &mut Vec<String>,
+    author_name: &str,
+    change: Vec<&str>,
+    default_author: Option<(String, String)>,
+) {
+    try_add_change_for_author(changes, author_name, change, default_author).unwrap()
 }
 
 #[cfg(test)]
@@ -400,7 +434,7 @@ mod add_change_for_author_tests {
     #[test]
     fn test_matches_default() {
         let mut changes = vec![];
-        add_change_for_author(
+        try_add_change_for_author(
             &mut changes,
             "Author 1",
             vec!["* Change 1"],
@@ -413,7 +447,7 @@ mod add_change_for_author_tests {
     #[test]
     fn test_not_matches_default() {
         let mut changes = vec![];
-        add_change_for_author(
+        try_add_change_for_author(
             &mut changes,
             "Author 1",
             vec!["* Change 1"],

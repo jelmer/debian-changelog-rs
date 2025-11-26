@@ -17,7 +17,7 @@ fn main() {
         .change_line("* This is a change".to_string())
         .finish();
 
-    // You can also use changelog.auto_add_change(), which behaves similarly to "dch"
+    // You can also use changelog.try_auto_add_change(), which behaves similarly to "dch"
 
     println!("{}", changelog);
 }
