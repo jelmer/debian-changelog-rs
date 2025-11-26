@@ -1005,7 +1005,11 @@ impl ChangeLog {
     /// # Arguments
     /// * `change` - The change to add, e.g. &["* Fix a bug"]
     /// * `author` - The author of the change, e.g. ("John Doe", "john@example")
-    pub fn auto_add_change(
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if text rewrapping fails.
+    pub fn try_auto_add_change(
         &mut self,
         change: &[&str],
         author: (String, String),
@@ -1015,7 +1019,7 @@ impl ChangeLog {
         match self.first_valid_entry() {
             Some(entry) if entry.is_unreleased() != Some(false) => {
                 // Add to existing entry
-                entry.add_change_for_author(change, author)?;
+                entry.try_add_change_for_author(change, author)?;
                 // TODO: set timestamp to std::cmp::max(entry.timestamp(), datetime)
                 // TODO: set urgency to std::cmp::max(entry.urgency(), urgency)
                 Ok(entry)
@@ -1039,6 +1043,38 @@ impl ChangeLog {
                 panic!("No existing entries found in changelog");
             }
         }
+    }
+
+    /// Automatically add a change to the changelog
+    ///
+    /// If there is an existing entry, the change will be added to the end of
+    /// the entry. If the previous change was attributed to another author,
+    /// a new section line ("[ Author Name ]") will be added as well.
+    ///
+    /// # Deprecated
+    ///
+    /// This function panics on errors. Use [`ChangeLog::try_auto_add_change`] instead for proper error handling.
+    ///
+    /// # Panics
+    ///
+    /// Panics if text rewrapping fails.
+    ///
+    /// # Arguments
+    /// * `change` - The change to add, e.g. &["* Fix a bug"]
+    /// * `author` - The author of the change, e.g. ("John Doe", "john@example")
+    #[deprecated(
+        since = "0.2.10",
+        note = "Use try_auto_add_change for proper error handling"
+    )]
+    pub fn auto_add_change(
+        &mut self,
+        change: &[&str],
+        author: (String, String),
+        datetime: Option<DateTime<FixedOffset>>,
+        urgency: Option<Urgency>,
+    ) -> Entry {
+        self.try_auto_add_change(change, author, datetime, urgency)
+            .unwrap()
     }
 
     /// Pop the first entry from the changelog.
@@ -1751,7 +1787,9 @@ impl Entry {
     ///
     /// If the author is not the same as the current maintainer, a new
     /// section will be created for the author in the entry (e.g. "[ John Doe ]").
-    pub fn add_change_for_author(
+    ///
+    /// Returns an error if text rewrapping fails.
+    pub fn try_add_change_for_author(
         &self,
         change: &[&str],
         author: (String, String),
@@ -1790,10 +1828,30 @@ impl Entry {
             }
         }
 
-        for line in crate::textwrap::rewrap_changes(change.iter().copied())? {
+        for line in crate::textwrap::try_rewrap_changes(change.iter().copied())? {
             self.append_change_line(line.as_ref());
         }
         Ok(())
+    }
+
+    /// Add a change for the specified author
+    ///
+    /// If the author is not the same as the current maintainer, a new
+    /// section will be created for the author in the entry (e.g. "[ John Doe ]").
+    ///
+    /// # Deprecated
+    ///
+    /// This function panics on errors. Use [`Entry::try_add_change_for_author`] instead for proper error handling.
+    ///
+    /// # Panics
+    ///
+    /// Panics if text rewrapping fails.
+    #[deprecated(
+        since = "0.2.10",
+        note = "Use try_add_change_for_author for proper error handling"
+    )]
+    pub fn add_change_for_author(&self, change: &[&str], author: (String, String)) {
+        self.try_add_change_for_author(change, author).unwrap()
     }
 
     /// Prepend a change line to the entry
@@ -1998,9 +2056,9 @@ impl Entry {
     ///  -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
     /// "#.parse().unwrap();
     ///
-    /// entry.add_changes_for_author("Alice", vec!["* New feature"]);
+    /// entry.try_add_changes_for_author("Alice", vec!["* New feature"]);
     /// ```
-    pub fn add_changes_for_author(
+    pub fn try_add_changes_for_author(
         &self,
         author_name: &str,
         changes: Vec<&str>,
@@ -2009,7 +2067,7 @@ impl Entry {
         let original_len = change_lines.len();
         let default_author = self.get_maintainer_identity().map(|id| (id.name, id.email));
 
-        crate::changes::add_change_for_author(
+        crate::changes::try_add_change_for_author(
             &mut change_lines,
             author_name,
             changes,
@@ -2042,6 +2100,24 @@ impl Entry {
             }
         }
         Ok(())
+    }
+
+    /// Add changes for the specified author
+    ///
+    /// # Deprecated
+    ///
+    /// This function panics on errors. Use [`Entry::try_add_changes_for_author`] instead for proper error handling.
+    ///
+    /// # Panics
+    ///
+    /// Panics if text rewrapping fails.
+    #[deprecated(
+        since = "0.2.10",
+        note = "Use try_add_changes_for_author for proper error handling"
+    )]
+    pub fn add_changes_for_author(&self, author_name: &str, changes: Vec<&str>) {
+        self.try_add_changes_for_author(author_name, changes)
+            .unwrap()
     }
 }
 
@@ -2405,7 +2481,7 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
             assert_eq!(entry.is_unreleased(), Some(true));
 
             let entry = cl
-                .auto_add_change(
+                .try_auto_add_change(
                     &["* And this one is new."],
                     ("Joe Example".to_string(), "joe@example.com".to_string()),
                     None,
@@ -2737,7 +2813,7 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
         .unwrap();
 
         entry
-            .add_change_for_author(
+            .try_add_change_for_author(
                 &["A change by the maintainer."],
                 ("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()),
             )
@@ -3227,7 +3303,7 @@ breezy (3.3.3-1) unstable; urgency=low
         .unwrap();
 
         entry
-            .add_changes_for_author("Alice", vec!["* Alice's change"])
+            .try_add_changes_for_author("Alice", vec!["* Alice's change"])
             .unwrap();
 
         let lines: Vec<_> = entry.change_lines().collect();
@@ -3254,7 +3330,7 @@ breezy (3.3.3-1) unstable; urgency=low
         .unwrap();
 
         entry
-            .add_changes_for_author("Alice", vec!["* Alice's new change"])
+            .try_add_changes_for_author("Alice", vec!["* Alice's new change"])
             .unwrap();
 
         let lines: Vec<_> = entry.change_lines().collect();
@@ -3281,7 +3357,7 @@ breezy (3.3.3-1) unstable; urgency=low
         .unwrap();
 
         entry
-            .add_changes_for_author("Alice", vec!["* Second change"])
+            .try_add_changes_for_author("Alice", vec!["* Second change"])
             .unwrap();
 
         let lines: Vec<_> = entry.change_lines().collect();
