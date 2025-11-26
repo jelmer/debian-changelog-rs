@@ -16,13 +16,39 @@ pub const INITIAL_INDENT: &str = "* ";
 
 #[inline]
 fn can_break_word(line: &str, pos: usize) -> bool {
-    if line.starts_with("Closes: #") && pos < "Closes: ".len() {
+    // Don't break if we're not at a space
+    if !line[pos..].starts_with(' ') {
         return false;
     }
-    if line.starts_with("LP: #") && pos < "LP: ".len() {
+
+    // Check if breaking here would split "Closes: #" or "LP: #"
+    // We need to look at the context around this position
+
+    // Pattern: "Closes: #" - don't break between "Closes:" and "#"
+    // or between ":" and " #"
+    if pos >= 7
+        && &line[pos.saturating_sub(8)..pos] == "Closes: "
+        && line[pos..].starts_with(" #")
+    {
+        // Don't break right after "Closes: " if followed by "#"
         return false;
     }
-    line[pos..].starts_with(' ')
+
+    // Also check if we're right after "Closes:" (before the space)
+    if pos >= 7 && line[pos.saturating_sub(7)..pos].ends_with("Closes:") {
+        return false;
+    }
+
+    // Pattern: "LP: #" - don't break between "LP:" and "#"
+    if pos >= 3 && &line[pos.saturating_sub(4)..pos] == "LP: " && line[pos..].starts_with(" #") {
+        return false;
+    }
+
+    if pos >= 3 && line[pos.saturating_sub(3)..pos].ends_with("LP:") {
+        return false;
+    }
+
+    true
 }
 
 #[cfg(test)]
@@ -45,11 +71,62 @@ mod can_break_word_tests {
 
     #[test]
     fn test_closes() {
-        assert!(!super::can_break_word("Closes: #123456", 6));
-        assert!(!super::can_break_word("Closes: #123456", 7));
-        assert!(!super::can_break_word("Closes: #123456", 8));
-        assert!(!super::can_break_word("Closes: #123456", 9));
-        assert!(super::can_break_word("Closes: #123456 foo", 15));
+        // Test "Closes: #" at the start of line
+        assert!(
+            !super::can_break_word("Closes: #123456", 6),
+            "Should not break after 'Closes:'"
+        );
+        assert!(
+            !super::can_break_word("Closes: #123456", 7),
+            "Should not break between 'Closes:' and '#'"
+        );
+        assert!(
+            super::can_break_word("Closes: #123456 foo", 15),
+            "Should break after bug number"
+        );
+
+        // Test "Closes: #" in the middle of line (the bug scenario)
+        assert!(
+            !super::can_break_word("Fix bug (Closes: #123456)", 16),
+            "Should not break after 'Closes:' in middle of line"
+        );
+        assert!(
+            !super::can_break_word("Fix bug (Closes: #123456)", 17),
+            "Should not break between 'Closes:' and '#' in middle"
+        );
+
+        // Test that we can break before "(Closes:"
+        assert!(
+            super::can_break_word("Fix bug (Closes: #123456)", 7),
+            "Should be able to break before '(Closes:'"
+        );
+    }
+
+    #[test]
+    fn test_lp() {
+        // Test "LP: #" pattern
+        assert!(
+            !super::can_break_word("LP: #123456", 2),
+            "Should not break after 'LP:'"
+        );
+        assert!(
+            !super::can_break_word("LP: #123456", 3),
+            "Should not break between 'LP:' and '#'"
+        );
+        assert!(
+            super::can_break_word("LP: #123456 foo", 11),
+            "Should break after bug number"
+        );
+
+        // Test "LP: #" in the middle of line
+        assert!(
+            !super::can_break_word("Fix bug (LP: #123456)", 12),
+            "Should not break after 'LP:' in middle of line"
+        );
+        assert!(
+            !super::can_break_word("Fix bug (LP: #123456)", 13),
+            "Should not break between 'LP:' and '#' in middle"
+        );
     }
 }
 
