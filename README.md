@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
         None,
         None,
-    );
+    )?;
     std::fs::write("debian/changelog", changelog.to_string())?;
     Ok(())
 }

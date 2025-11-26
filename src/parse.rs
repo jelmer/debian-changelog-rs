@@ -1011,14 +1011,14 @@ impl ChangeLog {
         author: (String, String),
         datetime: Option<DateTime<FixedOffset>>,
         urgency: Option<Urgency>,
-    ) -> Entry {
+    ) -> Result<Entry, crate::textwrap::Error> {
         match self.first_valid_entry() {
             Some(entry) if entry.is_unreleased() != Some(false) => {
                 // Add to existing entry
-                entry.add_change_for_author(change, author);
+                entry.add_change_for_author(change, author)?;
                 // TODO: set timestamp to std::cmp::max(entry.timestamp(), datetime)
                 // TODO: set urgency to std::cmp::max(entry.urgency(), urgency)
-                entry
+                Ok(entry)
             }
             Some(_entry) => {
                 // Create new entry
@@ -1033,7 +1033,7 @@ impl ChangeLog {
                 for change in change {
                     builder = builder.change_line(change.to_string());
                 }
-                builder.finish()
+                Ok(builder.finish())
             }
             None => {
                 panic!("No existing entries found in changelog");
@@ -1751,7 +1751,11 @@ impl Entry {
     ///
     /// If the author is not the same as the current maintainer, a new
     /// section will be created for the author in the entry (e.g. "[ John Doe ]").
-    pub fn add_change_for_author(&self, change: &[&str], author: (String, String)) {
+    pub fn add_change_for_author(
+        &self,
+        change: &[&str],
+        author: (String, String),
+    ) -> Result<(), crate::textwrap::Error> {
         let changes_lines = self.change_lines().collect::<Vec<_>>();
         let by_author = crate::changes::changes_by_author(changes_lines.iter().map(|s| s.as_str()))
             .collect::<Vec<_>>();
@@ -1786,9 +1790,10 @@ impl Entry {
             }
         }
 
-        for line in crate::textwrap::rewrap_changes(change.iter().copied()) {
+        for line in crate::textwrap::rewrap_changes(change.iter().copied())? {
             self.append_change_line(line.as_ref());
         }
+        Ok(())
     }
 
     /// Prepend a change line to the entry
@@ -1995,7 +2000,11 @@ impl Entry {
     ///
     /// entry.add_changes_for_author("Alice", vec!["* New feature"]);
     /// ```
-    pub fn add_changes_for_author(&self, author_name: &str, changes: Vec<&str>) {
+    pub fn add_changes_for_author(
+        &self,
+        author_name: &str,
+        changes: Vec<&str>,
+    ) -> Result<(), crate::textwrap::Error> {
         let mut change_lines: Vec<String> = self.change_lines().collect();
         let original_len = change_lines.len();
         let default_author = self.get_maintainer_identity().map(|id| (id.name, id.email));
@@ -2005,7 +2014,7 @@ impl Entry {
             author_name,
             changes,
             default_author,
-        );
+        )?;
 
         // The function modifies change_lines in place. We need to handle two cases:
         // 1. Lines were inserted at the beginning (when wrapping existing changes)
@@ -2032,6 +2041,7 @@ impl Entry {
                 }
             }
         }
+        Ok(())
     }
 }
 
@@ -2394,12 +2404,14 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
             assert_eq!(entry.package(), Some("lintian-brush".into()));
             assert_eq!(entry.is_unreleased(), Some(true));
 
-            let entry = cl.auto_add_change(
-                &["* And this one is new."],
-                ("Joe Example".to_string(), "joe@example.com".to_string()),
-                None,
-                None,
-            );
+            let entry = cl
+                .auto_add_change(
+                    &["* And this one is new."],
+                    ("Joe Example".to_string(), "joe@example.com".to_string()),
+                    None,
+                    None,
+                )
+                .unwrap();
 
             assert_eq!(cl.iter().count(), 1);
 
@@ -2724,10 +2736,12 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
         .parse()
         .unwrap();
 
-        entry.add_change_for_author(
-            &["A change by the maintainer."],
-            ("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()),
-        );
+        entry
+            .add_change_for_author(
+                &["A change by the maintainer."],
+                ("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()),
+            )
+            .unwrap();
     }
 
     #[test]
@@ -3212,7 +3226,9 @@ breezy (3.3.3-1) unstable; urgency=low
         .parse()
         .unwrap();
 
-        entry.add_changes_for_author("Alice", vec!["* Alice's change"]);
+        entry
+            .add_changes_for_author("Alice", vec!["* Alice's change"])
+            .unwrap();
 
         let lines: Vec<_> = entry.change_lines().collect();
 
@@ -3237,7 +3253,9 @@ breezy (3.3.3-1) unstable; urgency=low
         .parse()
         .unwrap();
 
-        entry.add_changes_for_author("Alice", vec!["* Alice's new change"]);
+        entry
+            .add_changes_for_author("Alice", vec!["* Alice's new change"])
+            .unwrap();
 
         let lines: Vec<_> = entry.change_lines().collect();
 
@@ -3262,7 +3280,9 @@ breezy (3.3.3-1) unstable; urgency=low
         .parse()
         .unwrap();
 
-        entry.add_changes_for_author("Alice", vec!["* Second change"]);
+        entry
+            .add_changes_for_author("Alice", vec!["* Second change"])
+            .unwrap();
 
         let lines: Vec<_> = entry.change_lines().collect();
 

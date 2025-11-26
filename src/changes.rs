@@ -361,7 +361,7 @@ pub fn add_change_for_author(
     author_name: &str,
     change: Vec<&str>,
     default_author: Option<(String, String)>,
-) {
+) -> Result<(), crate::textwrap::Error> {
     let by_author = changes_by_author(changes.iter().map(|s| s.as_str())).collect::<Vec<_>>();
 
     // There are no per author sections yet, so attribute current changes to changelog entry author
@@ -385,7 +385,12 @@ pub fn add_change_for_author(
         }
     }
 
-    changes.extend(crate::textwrap::rewrap_changes(change.into_iter()).map(|s| s.to_string()));
+    changes.extend(
+        crate::textwrap::rewrap_changes(change.into_iter())?
+            .iter()
+            .map(|s| s.to_string()),
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -400,7 +405,8 @@ mod add_change_for_author_tests {
             "Author 1",
             vec!["* Change 1"],
             Some(("Author 1".to_string(), "jelmer@debian.org".to_string())),
-        );
+        )
+        .unwrap();
         assert_eq!(changes, vec!["* Change 1"]);
     }
 
@@ -415,7 +421,8 @@ mod add_change_for_author_tests {
                 "Default Author".to_string(),
                 "jelmer@debian.org".to_string(),
             )),
-        );
+        )
+        .unwrap();
         assert_eq!(changes, vec!["[ Author 1 ]", "* Change 1"]);
     }
 }

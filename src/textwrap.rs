@@ -359,18 +359,25 @@ fn rewrap_change<'a>(change: &[&'a str], width: Option<usize>) -> Result<Vec<Cow
 
     let mut lines = vec![&change[0][prefix_len..]];
 
-    // Strip the leading indentation
-    for (lineno, line) in change[1..].iter().enumerate() {
-        if line.len() < prefix_len {
-            lines.push(&line[0..0]);
-        } else if line.strip_prefix(subsequent_indent.as_str()).is_some() {
-            lines.push(&line[initial_indent.len()..]);
+    // Strip the leading indentation from continuation lines
+    // Accept any indentation >= 0, to handle varying indentation levels
+    for line in change[1..].iter() {
+        if line.is_empty() {
+            // Empty line
+            lines.push(line);
+        } else if line.starts_with(' ') {
+            // Line with indentation - determine how much to strip
+            let line_indent = line.len() - line.trim_start_matches(' ').len();
+            if line_indent >= prefix_len {
+                // Strip the prefix indentation
+                lines.push(&line[prefix_len..]);
+            } else {
+                // Less indentation than prefix - just use the line as-is
+                lines.push(line);
+            }
         } else {
-            return Err(Error::UnexpectedIndent {
-                lineno,
-                indent: subsequent_indent.len(),
-                line: line.to_string(),
-            });
+            // No indentation - use line as-is
+            lines.push(line);
         }
     }
 
@@ -411,34 +418,37 @@ fn rewrap_change<'a>(change: &[&'a str], width: Option<usize>) -> Result<Vec<Cow
 }
 
 /// Rewrap lines from an iterator of changes
+///
+/// Returns a Result containing the rewrapped lines or an error if rewrapping fails.
 pub fn rewrap_changes<'a>(
     changes: impl Iterator<Item = &'a str>,
-) -> impl Iterator<Item = Cow<'a, str>> {
+) -> Result<Vec<Cow<'a, str>>, Error> {
     let mut change = Vec::new();
     let mut indent_len: Option<usize> = None;
     let mut ret = vec![];
     for line in changes {
         // Start of a new change
         if let Some(indent) = regex_captures!(r"^[  ]*[\+\-\*] ", line) {
-            ret.extend(rewrap_change(change.as_slice(), None).unwrap());
+            if !change.is_empty() {
+                ret.extend(rewrap_change(change.as_slice(), None)?);
+            }
             indent_len = Some(indent.len());
             change = vec![line];
-        } else if let Some(current_indent) = indent_len {
-            if line.starts_with(&" ".repeat(current_indent)) {
-                change.push(line[current_indent..].into());
-            } else {
-                ret.extend(rewrap_change(change.as_slice(), None).unwrap());
-                change = vec![line];
-            }
+        } else if let Some(_current_indent) = indent_len {
+            // Continuation line - keep full line with indentation
+            change.push(line);
         } else {
-            ret.extend(rewrap_change(change.as_slice(), None).unwrap());
+            if !change.is_empty() {
+                ret.extend(rewrap_change(change.as_slice(), None)?);
+            }
             ret.push(line.into());
+            change = vec![];
         }
     }
     if !change.is_empty() {
-        ret.extend(rewrap_change(change.as_slice(), None).unwrap());
+        ret.extend(rewrap_change(change.as_slice(), None)?);
     }
-    ret.into_iter()
+    Ok(ret)
 }
 
 #[cfg(test)]
@@ -500,5 +510,113 @@ mod rewrap_tests {
         _Choices: ${FOO}, !Other[ You only have to translate Other, remove the exclamation mark and this comment between brackets]
       Currently text, newt, slang and gtk frontends support this feature.
 "###.split('\n').collect::<Vec<_>>().as_slice(), None).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod rewrap_changes_tests {
+    use super::rewrap_changes;
+
+    /// Test that long unbreakable lines (e.g., URLs) don't cause errors
+    #[test]
+    fn test_long_url() {
+        let changes = vec![
+            "  * Fix bug",
+            "    https://www.example.com/this/is/a/very/long/url/that/can/not/be/broken/because/it/is/longer/than/80/characters.",
+        ];
+
+        let result = rewrap_changes(changes.into_iter());
+        assert!(result.is_ok(), "Should handle long URLs without error");
+
+        let lines = result.unwrap();
+        assert_eq!(
+            lines,
+            vec![
+                "  * Fix bug",
+                "    https://www.example.com/this/is/a/very/long/url/that/can/not/be/broken/because/it/is/longer/than/80/characters."
+            ]
+        );
+    }
+
+    /// Test that continuation lines have proper 4-space indentation after wrapping
+    #[test]
+    fn test_continuation_indent() {
+        let changes = vec![
+            "  * Fix blocks/blockedby of archived bugs (Closes: #XXXXXXX). Thanks to somebody who fixed it.",
+            "  * Provide informative error message when unarchive fails because the bug is not archived.",
+        ];
+
+        let result = rewrap_changes(changes.into_iter());
+        assert!(result.is_ok(), "Should wrap successfully");
+
+        let lines = result.unwrap();
+        assert_eq!(
+            lines,
+            vec![
+                "  * Fix blocks/blockedby of archived bugs (Closes: #XXXXXXX). Thanks to",
+                "    somebody who fixed it.",
+                "  * Provide informative error message when unarchive fails because the bug is",
+                "    not archived."
+            ]
+        );
+    }
+
+    /// Test that "Closes: #" pattern stays together when wrapping
+    #[test]
+    fn test_closes_tag_not_broken() {
+        let changes = vec![
+            "  * Fix blocks/blockedby of archived bugs and more blah blah blah bl (Closes: #XXXXXXX).",
+        ];
+
+        let result = rewrap_changes(changes.into_iter());
+        assert!(result.is_ok(), "Should wrap successfully");
+
+        let lines = result.unwrap();
+        assert_eq!(
+            lines,
+            vec![
+                "  * Fix blocks/blockedby of archived bugs and more blah blah blah bl",
+                "    (Closes: #XXXXXXX)."
+            ]
+        );
+    }
+
+    /// Test handling of complex nested indentation structures
+    #[test]
+    fn test_complex_nested_indentation() {
+        let changes = vec![
+            "  * Main change item",
+            "    - Sub-item with 4 spaces",
+            "      + Nested sub-item with 6 spaces",
+            "        More text in nested item",
+            "    - Another sub-item",
+        ];
+
+        let result = rewrap_changes(changes.into_iter());
+        assert!(result.is_ok(), "Should handle nested indentation");
+
+        let lines = result.unwrap();
+        assert_eq!(
+            lines,
+            vec![
+                "  * Main change item",
+                "    - Sub-item with 4 spaces",
+                "      + Nested sub-item with 6 spaces",
+                "        More text in nested item",
+                "    - Another sub-item",
+            ]
+        );
+    }
+
+    /// Test handling of empty lines between changes
+    #[test]
+    fn test_empty_lines() {
+        let changes = vec!["  * First change", "", "  * Second change"];
+
+        let result = rewrap_changes(changes.into_iter());
+        assert!(result.is_ok(), "Should handle empty lines");
+
+        let lines = result.unwrap();
+        assert_eq!(lines, vec!["  * First change", "", "  * Second change"]);
     }
 }

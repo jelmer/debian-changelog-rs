@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
         None,
         None,
-    );
+    )?;
     changelog.write(std::io::stdout())?;
     Ok(())
 }
