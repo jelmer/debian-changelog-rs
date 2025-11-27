@@ -1936,6 +1936,47 @@ impl Entry {
             .splice_children(last_child.index() + 1..last_child.index() + 1, vec![syntax]);
     }
 
+    /// Add a bullet point to the changelog entry.
+    ///
+    /// This is a convenience method that appends a bullet point line to the entry.
+    /// Always prepends "* " to the text and wraps the text to 78 columns if needed.
+    ///
+    /// # Arguments
+    /// * `text` - The text of the bullet point (without the "* " prefix)
+    ///
+    /// # Examples
+    /// ```
+    /// use debian_changelog::ChangeLog;
+    ///
+    /// let mut changelog = ChangeLog::new();
+    /// let entry = changelog.new_entry()
+    ///     .maintainer(("Author".into(), "author@example.com".into()))
+    ///     .distribution("unstable".to_string())
+    ///     .version("1.0.0".parse().unwrap())
+    ///     .finish();
+    ///
+    /// entry.add_bullet("First change");
+    /// entry.add_bullet("Second change");
+    ///
+    /// let lines: Vec<_> = entry.change_lines().collect();
+    /// assert_eq!(lines[0], "* First change");
+    /// assert_eq!(lines[1], "* Second change");
+    /// ```
+    pub fn add_bullet(&self, text: &str) {
+        // Wrap the text with "* " prefix
+        let wrapped = crate::textwrap::textwrap(
+            text,
+            Some(crate::textwrap::DEFAULT_WIDTH),
+            Some(crate::textwrap::INITIAL_INDENT),
+            Some("  "),
+        );
+
+        // Append each wrapped line
+        for line in wrapped {
+            self.append_change_line(&line);
+        }
+    }
+
     /// Returns the changes of the entry.
     pub fn change_lines(&self) -> impl Iterator<Item = String> + '_ {
         let mut lines = self
