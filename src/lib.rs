@@ -431,6 +431,109 @@ impl Change {
         }
     }
 
+    /// Replace a specific line in this change by index.
+    ///
+    /// # Arguments
+    /// * `index` - The zero-based index of the line to replace
+    /// * `new_text` - The new text for the line
+    ///
+    /// # Returns
+    /// * `Ok(())` if the line was replaced successfully
+    /// * `Err(Error)` if the index is out of bounds
+    ///
+    /// # Examples
+    /// ```
+    /// use debian_changelog::{ChangeLog, iter_changes_by_author};
+    ///
+    /// let changelog_text = r#"blah (1.0-1) unstable; urgency=low
+    ///
+    ///   * First change
+    ///   * Second change
+    ///
+    ///  -- Author <email@example.com>  Mon, 01 Jan 2024 00:00:00 +0000
+    /// "#;
+    ///
+    /// let changelog = ChangeLog::read_relaxed(changelog_text.as_bytes()).unwrap();
+    /// let changes = iter_changes_by_author(&changelog);
+    /// changes[0].replace_line(0, "* Updated first change").unwrap();
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn replace_line(&self, index: usize, new_text: &str) -> Result<(), Error> {
+        if index >= self.detail_tokens.len() {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "Line index {} out of bounds (0..{})",
+                    index,
+                    self.detail_tokens.len()
+                ),
+            )));
+        }
+
+        let mut new_lines = self.lines();
+        new_lines[index] = new_text.to_string();
+
+        self.replace_with(new_lines.iter().map(|s| s.as_str()).collect());
+        Ok(())
+    }
+
+    /// Update lines in this change that match a predicate.
+    ///
+    /// This method finds all lines that match the predicate function and replaces
+    /// them with the result of the updater function.
+    ///
+    /// # Arguments
+    /// * `predicate` - A function that returns true for lines that should be updated
+    /// * `updater` - A function that takes the old line text and returns the new line text
+    ///
+    /// # Returns
+    /// The number of lines that were updated
+    ///
+    /// # Examples
+    /// ```
+    /// use debian_changelog::{ChangeLog, iter_changes_by_author};
+    ///
+    /// let changelog_text = r#"blah (1.0-1) unstable; urgency=low
+    ///
+    ///   * First change
+    ///   * Second change
+    ///   * Third change
+    ///
+    ///  -- Author <email@example.com>  Mon, 01 Jan 2024 00:00:00 +0000
+    /// "#;
+    ///
+    /// let changelog = ChangeLog::read_relaxed(changelog_text.as_bytes()).unwrap();
+    /// let changes = iter_changes_by_author(&changelog);
+    ///
+    /// // Update lines containing "First" or "Second"
+    /// let count = changes[0].update_lines(
+    ///     |line| line.contains("First") || line.contains("Second"),
+    ///     |line| format!("{} (updated)", line)
+    /// );
+    /// assert_eq!(count, 2);
+    /// ```
+    pub fn update_lines<F, G>(&self, predicate: F, updater: G) -> usize
+    where
+        F: Fn(&str) -> bool,
+        G: Fn(&str) -> String,
+    {
+        let mut new_lines = self.lines();
+        let mut update_count = 0;
+
+        for line in &mut new_lines {
+            if predicate(line) {
+                *line = updater(line);
+                update_count += 1;
+            }
+        }
+
+        if update_count > 0 {
+            self.replace_with(new_lines.iter().map(|s| s.as_str()).collect());
+        }
+
+        update_count
+    }
+
     /// Split this change into individual bullet points.
     ///
     /// Each bullet point (line starting with "* ") and its continuation lines
@@ -2394,5 +2497,407 @@ lintian-brush (0.1-1) unstable; urgency=medium
  -- Joe Example <joe@example.com>  Mon, 26 Feb 2018 11:31:48 -0800
 "#;
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_replace_line() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * First change
+  * Second change
+  * Third change
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        assert_eq!(changes.len(), 1);
+
+        // Replace the second line
+        changes[0]
+            .replace_line(1, "* Updated second change")
+            .unwrap();
+
+        // Re-read and verify
+        let updated_changes = iter_changes_by_author(&changelog);
+        assert_eq!(
+            updated_changes[0].lines(),
+            vec![
+                "* First change",
+                "* Updated second change",
+                "* Third change"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_replace_line_out_of_bounds() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * First change
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+        assert_eq!(changes.len(), 1);
+
+        // Try to replace a line that doesn't exist
+        let result = changes[0].replace_line(5, "* Updated");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_update_lines() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * First change
+  * Second change
+  * Third change
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+
+        // Update lines containing "First" or "Second"
+        let count = changes[0].update_lines(
+            |line| line.contains("First") || line.contains("Second"),
+            |line| format!("{} (updated)", line),
+        );
+
+        assert_eq!(count, 2);
+
+        // Verify the changes
+        let updated_changes = iter_changes_by_author(&changelog);
+        assert_eq!(
+            updated_changes[0].lines(),
+            vec![
+                "* First change (updated)",
+                "* Second change (updated)",
+                "* Third change"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_update_lines_no_matches() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * First change
+  * Second change
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+
+        // Update lines that don't exist
+        let count = changes[0].update_lines(
+            |line| line.contains("NonExistent"),
+            |line| format!("{} (updated)", line),
+        );
+
+        assert_eq!(count, 0);
+
+        // Verify nothing changed
+        let updated_changes = iter_changes_by_author(&changelog);
+        assert_eq!(
+            updated_changes[0].lines(),
+            vec!["* First change", "* Second change"]
+        );
+    }
+
+    #[test]
+    fn test_update_lines_with_continuation() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * First change
+    with continuation line
+  * Second change
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+
+        // Update the continuation line
+        let count = changes[0].update_lines(
+            |line| line.contains("continuation"),
+            |line| line.replace("continuation", "updated"),
+        );
+
+        assert_eq!(count, 1);
+
+        // Verify the changes
+        let updated_changes = iter_changes_by_author(&changelog);
+        assert_eq!(
+            updated_changes[0].lines(),
+            vec!["* First change", "  with updated line", "* Second change"]
+        );
+    }
+
+    #[test]
+    fn test_add_bullet() {
+        let mut changelog = ChangeLog::new();
+        let entry = changelog
+            .new_entry()
+            .maintainer(("Test User".into(), "test@example.com".into()))
+            .distribution("unstable".to_string())
+            .version("1.0.0".parse().unwrap())
+            .finish();
+
+        // Add bullets - always prepends "* " automatically
+        entry.add_bullet("First change");
+        entry.add_bullet("Second change");
+        entry.add_bullet("Third change");
+
+        let lines: Vec<_> = entry.change_lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], "* First change");
+        assert_eq!(lines[1], "* Second change");
+        assert_eq!(lines[2], "* Third change");
+    }
+
+    #[test]
+    fn test_add_bullet_empty_entry() {
+        let mut changelog = ChangeLog::new();
+        let entry = changelog
+            .new_entry()
+            .maintainer(("Test User".into(), "test@example.com".into()))
+            .distribution("unstable".to_string())
+            .version("1.0.0".parse().unwrap())
+            .finish();
+
+        entry.add_bullet("Only bullet");
+
+        let lines: Vec<_> = entry.change_lines().collect();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0], "* Only bullet");
+    }
+
+    #[test]
+    fn test_add_bullet_long_text() {
+        let mut changelog = ChangeLog::new();
+        let entry = changelog
+            .new_entry()
+            .maintainer(("Test User".into(), "test@example.com".into()))
+            .distribution("unstable".to_string())
+            .version("1.0.0".parse().unwrap())
+            .finish();
+
+        // Add a bullet with text that's too long and should be wrapped
+        entry.add_bullet("This is a very long line that exceeds the 78 column limit and should be automatically wrapped to multiple lines with proper indentation");
+
+        let lines: Vec<_> = entry.change_lines().collect();
+        // Should be wrapped into multiple lines
+        assert!(lines.len() > 1);
+        // First line should start with "* "
+        assert!(lines[0].starts_with("* "));
+        // Continuation lines should start with "  " (two spaces)
+        for line in &lines[1..] {
+            assert!(line.starts_with("  "));
+        }
+        // No line should exceed 78 characters
+        for line in &lines {
+            assert!(line.len() <= 78, "Line exceeds 78 chars: {}", line);
+        }
+    }
+
+    #[test]
+    fn test_add_bullet_preserves_closes() {
+        let mut changelog = ChangeLog::new();
+        let entry = changelog
+            .new_entry()
+            .maintainer(("Test User".into(), "test@example.com".into()))
+            .distribution("unstable".to_string())
+            .version("1.0.0".parse().unwrap())
+            .finish();
+
+        // Add a bullet with "Closes: #" that should not be broken
+        entry.add_bullet("Fix a very important bug that was causing problems (Closes: #123456)");
+
+        let lines: Vec<_> = entry.change_lines().collect();
+        let text = lines.join(" ");
+        // "Closes: #123456" should not be split across lines
+        assert!(text.contains("Closes: #123456"));
+    }
+
+    #[test]
+    fn test_add_bullet_multiple_closes() {
+        let mut changelog = ChangeLog::new();
+        let entry = changelog
+            .new_entry()
+            .maintainer(("Test User".into(), "test@example.com".into()))
+            .distribution("unstable".to_string())
+            .version("1.0.0".parse().unwrap())
+            .finish();
+
+        // Add bullet with multiple bug references
+        entry.add_bullet("Fix several bugs (Closes: #123456, #789012)");
+
+        let lines: Vec<_> = entry.change_lines().collect();
+        let text = lines.join(" ");
+        assert!(text.contains("Closes: #123456"));
+        assert!(text.contains("#789012"));
+    }
+
+    #[test]
+    fn test_add_bullet_preserves_lp() {
+        let mut changelog = ChangeLog::new();
+        let entry = changelog
+            .new_entry()
+            .maintainer(("Test User".into(), "test@example.com".into()))
+            .distribution("unstable".to_string())
+            .version("1.0.0".parse().unwrap())
+            .finish();
+
+        // Add bullet with Launchpad bug reference
+        entry.add_bullet("Fix bug (LP: #123456)");
+
+        let lines: Vec<_> = entry.change_lines().collect();
+        let text = lines.join(" ");
+        // "LP: #123456" should not be split
+        assert!(text.contains("LP: #123456"));
+    }
+
+    #[test]
+    fn test_add_bullet_with_existing_bullets() {
+        let mut changelog = ChangeLog::new();
+        let entry = changelog
+            .new_entry()
+            .maintainer(("Test User".into(), "test@example.com".into()))
+            .distribution("unstable".to_string())
+            .version("1.0.0".parse().unwrap())
+            .change_line("* Existing change".to_string())
+            .finish();
+
+        // Add more bullets
+        entry.add_bullet("New change");
+
+        let lines: Vec<_> = entry.change_lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "* Existing change");
+        assert_eq!(lines[1], "* New change");
+    }
+
+    #[test]
+    fn test_add_bullet_special_characters() {
+        let mut changelog = ChangeLog::new();
+        let entry = changelog
+            .new_entry()
+            .maintainer(("Test User".into(), "test@example.com".into()))
+            .distribution("unstable".to_string())
+            .version("1.0.0".parse().unwrap())
+            .finish();
+
+        entry.add_bullet("Fix issue with \"quotes\" and 'apostrophes'");
+        entry.add_bullet("Handle paths like /usr/bin/foo");
+        entry.add_bullet("Support $VARIABLES and ${EXPANSIONS}");
+
+        let lines: Vec<_> = entry.change_lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].contains("\"quotes\""));
+        assert!(lines[1].contains("/usr/bin/foo"));
+        assert!(lines[2].contains("$VARIABLES"));
+    }
+
+    #[test]
+    fn test_add_bullet_empty_string() {
+        let mut changelog = ChangeLog::new();
+        let entry = changelog
+            .new_entry()
+            .maintainer(("Test User".into(), "test@example.com".into()))
+            .distribution("unstable".to_string())
+            .version("1.0.0".parse().unwrap())
+            .finish();
+
+        // Empty string gets filtered out by textwrap - this is expected behavior
+        entry.add_bullet("");
+
+        let lines: Vec<_> = entry.change_lines().collect();
+        // textwrap filters out empty strings, so no line is added
+        assert_eq!(lines.len(), 0);
+    }
+
+    #[test]
+    fn test_add_bullet_url() {
+        let mut changelog = ChangeLog::new();
+        let entry = changelog
+            .new_entry()
+            .maintainer(("Test User".into(), "test@example.com".into()))
+            .distribution("unstable".to_string())
+            .version("1.0.0".parse().unwrap())
+            .finish();
+
+        // Long URL should not be broken
+        entry.add_bullet("Update documentation at https://www.example.com/very/long/path/to/documentation/page.html");
+
+        let lines: Vec<_> = entry.change_lines().collect();
+        let text = lines.join(" ");
+        assert!(text.contains("https://www.example.com"));
+    }
+
+    #[test]
+    fn test_add_bullet_mixed_with_manual_changes() {
+        let mut changelog = ChangeLog::new();
+        let entry = changelog
+            .new_entry()
+            .maintainer(("Test User".into(), "test@example.com".into()))
+            .distribution("unstable".to_string())
+            .version("1.0.0".parse().unwrap())
+            .finish();
+
+        // Mix add_bullet with manual append_change_line
+        entry.add_bullet("First bullet");
+        entry.append_change_line("  Manual continuation line");
+        entry.add_bullet("Second bullet");
+
+        let lines: Vec<_> = entry.change_lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], "* First bullet");
+        assert_eq!(lines[1], "  Manual continuation line");
+        assert_eq!(lines[2], "* Second bullet");
+    }
+
+    #[test]
+    fn test_replace_line_with_continuation() {
+        let changelog: ChangeLog = r#"breezy (3.3.4-1) unstable; urgency=low
+
+  * First change
+    with continuation line
+  * Second change
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+
+        // Replace the continuation line
+        changes[0]
+            .replace_line(1, "  with updated continuation")
+            .unwrap();
+
+        let updated_changes = iter_changes_by_author(&changelog);
+        assert_eq!(
+            updated_changes[0].lines(),
+            vec![
+                "* First change",
+                "  with updated continuation",
+                "* Second change"
+            ]
+        );
     }
 }
