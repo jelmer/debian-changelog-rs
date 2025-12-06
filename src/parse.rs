@@ -2165,7 +2165,20 @@ impl Entry {
 const CHANGELOG_TIME_FORMAT: &str = "%a, %d %b %Y %H:%M:%S %z";
 
 fn parse_time_string(time_str: &str) -> Result<DateTime<FixedOffset>, chrono::ParseError> {
-    DateTime::parse_from_str(time_str, CHANGELOG_TIME_FORMAT)
+    // First try parsing with day-of-week validation
+    if let Ok(dt) = DateTime::parse_from_str(time_str, CHANGELOG_TIME_FORMAT) {
+        return Ok(dt);
+    }
+
+    // If that fails, try parsing without day-of-week validation
+    // This is more lenient for changelogs that have incorrect day-of-week values
+    // Skip the day name (everything before the first comma and space)
+    if let Some(after_comma) = time_str.split_once(", ") {
+        DateTime::parse_from_str(after_comma.1, "%d %b %Y %H:%M:%S %z")
+    } else {
+        // If there's no comma, return the original error
+        DateTime::parse_from_str(time_str, CHANGELOG_TIME_FORMAT)
+    }
 }
 
 #[cfg(test)]
@@ -3410,5 +3423,33 @@ breezy (3.3.3-1) unstable; urgency=low
         // Should have both changes
         assert!(lines.iter().any(|l| l.contains("First change")));
         assert!(lines.iter().any(|l| l.contains("Second change")));
+    }
+
+    #[test]
+    fn test_datetime_with_incorrect_day_of_week() {
+        // Test for bug: datetime() should parse leniently even when day-of-week doesn't match
+        // This changelog entry has "Mon, 22 Mar 2011" but Mar 22, 2011 was actually Tuesday
+        let entry: Entry = r#"blah (0.1-2) UNRELEASED; urgency=medium
+
+  * New release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 22 Mar 2011 16:47:42 +0000
+"#
+        .parse()
+        .unwrap();
+
+        // timestamp() should return just the date portion
+        assert_eq!(
+            entry.timestamp(),
+            Some("Mon, 22 Mar 2011 16:47:42 +0000".into())
+        );
+
+        // datetime() should successfully parse the timestamp despite incorrect day-of-week
+        let datetime = entry.datetime();
+        assert!(
+            datetime.is_some(),
+            "datetime() should not return None for timestamp with incorrect day-of-week"
+        );
+        assert_eq!(datetime.unwrap().to_rfc3339(), "2011-03-22T16:47:42+00:00");
     }
 }
