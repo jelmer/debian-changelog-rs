@@ -1,10 +1,43 @@
 use crate::lex::lex;
 use crate::SyntaxKind;
 use crate::SyntaxKind::*;
+#[cfg(feature = "chrono")]
 use chrono::{DateTime, FixedOffset};
 use debversion::Version;
 use rowan::ast::AstNode;
 use std::str::FromStr;
+
+/// Trait for types that can be converted to a timestamp string
+///
+/// This trait allows both chrono DateTime types and plain strings to be used
+/// as timestamps in the changelog API.
+pub trait IntoTimestamp {
+    /// Convert this value into a timestamp string in Debian changelog format
+    fn into_timestamp(self) -> String;
+}
+
+impl IntoTimestamp for String {
+    fn into_timestamp(self) -> String {
+        self
+    }
+}
+
+impl IntoTimestamp for &str {
+    fn into_timestamp(self) -> String {
+        self.to_string()
+    }
+}
+
+#[cfg(feature = "chrono")]
+impl<Tz: chrono::TimeZone> IntoTimestamp for DateTime<Tz>
+where
+    Tz::Offset: std::fmt::Display,
+{
+    fn into_timestamp(self) -> String {
+        const CHANGELOG_TIME_FORMAT: &str = "%a, %d %b %Y %H:%M:%S %z";
+        self.format(CHANGELOG_TIME_FORMAT).to_string()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
 /// Urgency of the changes in the changelog entry
@@ -681,7 +714,7 @@ pub struct EntryBuilder {
     distributions: Option<Vec<String>>,
     urgency: Option<Urgency>,
     maintainer: Option<(String, String)>,
-    timestamp: Option<chrono::DateTime<FixedOffset>>,
+    timestamp_string: Option<String>,
     change_lines: Vec<String>,
 }
 
@@ -727,9 +760,10 @@ impl EntryBuilder {
         self
     }
 
+    /// Set the timestamp (accepts chrono::DateTime or String)
     #[must_use]
-    pub fn datetime(mut self, timestamp: chrono::DateTime<FixedOffset>) -> Self {
-        self.timestamp = Some(timestamp);
+    pub fn datetime(mut self, timestamp: impl IntoTimestamp) -> Self {
+        self.timestamp_string = Some(timestamp.into_timestamp());
         self
     }
 
@@ -858,12 +892,11 @@ impl EntryBuilder {
             builder.token(EMAIL.into(), format!("<{}>", maintainer.1).as_str());
         }
 
-        if let Some(timestamp) = self.timestamp.as_ref() {
+        if let Some(timestamp) = self.timestamp_string.as_ref() {
             builder.token(WHITESPACE.into(), "  ");
 
             builder.start_node(TIMESTAMP.into());
-            let ts = timestamp.format("%a, %d %b %Y %H:%M:%S %z").to_string();
-            let mut it = ts.split(' ').peekable();
+            let mut it = timestamp.split(' ').peekable();
             while let Some(p) = it.next() {
                 builder.token(TEXT.into(), p);
                 if it.peek().is_some() {
@@ -954,7 +987,7 @@ impl ChangeLog {
             distributions: None,
             urgency: None,
             maintainer: None,
-            timestamp: None,
+            timestamp_string: None,
             change_lines: vec![],
         }
     }
@@ -988,7 +1021,10 @@ impl ChangeLog {
             distributions: Some(vec![crate::UNRELEASED.into()]),
             urgency: Some(Urgency::default()),
             maintainer: crate::get_maintainer(),
-            timestamp: Some(chrono::Utc::now().into()),
+            #[cfg(feature = "chrono")]
+            timestamp_string: Some(chrono::Utc::now().into_timestamp()),
+            #[cfg(not(feature = "chrono"))]
+            timestamp_string: None,
             change_lines: vec![],
         }
     }
@@ -1013,7 +1049,7 @@ impl ChangeLog {
         &mut self,
         change: &[&str],
         author: (String, String),
-        datetime: Option<DateTime<FixedOffset>>,
+        datetime: Option<impl IntoTimestamp>,
         urgency: Option<Urgency>,
     ) -> Result<Entry, crate::textwrap::Error> {
         match self.first_valid_entry() {
@@ -1070,7 +1106,7 @@ impl ChangeLog {
         &mut self,
         change: &[&str],
         author: (String, String),
-        datetime: Option<DateTime<FixedOffset>>,
+        datetime: Option<impl IntoTimestamp>,
         urgency: Option<Urgency>,
     ) -> Entry {
         self.try_auto_add_change(change, author, datetime, urgency)
@@ -1731,11 +1767,13 @@ impl Entry {
     }
 
     /// Set the datetime of the entry.
+    #[cfg(feature = "chrono")]
     pub fn set_datetime(&mut self, datetime: DateTime<FixedOffset>) {
         self.set_timestamp(format!("{}", datetime.format("%a, %d %b %Y %H:%M:%S %z")));
     }
 
     /// Returns the datetime of the entry.
+    #[cfg(feature = "chrono")]
     pub fn datetime(&self) -> Option<DateTime<FixedOffset>> {
         self.timestamp().and_then(|ts| parse_time_string(&ts).ok())
     }
@@ -2162,8 +2200,10 @@ impl Entry {
     }
 }
 
+#[cfg(feature = "chrono")]
 const CHANGELOG_TIME_FORMAT: &str = "%a, %d %b %Y %H:%M:%S %z";
 
+#[cfg(feature = "chrono")]
 fn parse_time_string(time_str: &str) -> Result<DateTime<FixedOffset>, chrono::ParseError> {
     DateTime::parse_from_str(time_str, CHANGELOG_TIME_FORMAT)
 }
@@ -2317,6 +2357,7 @@ breezy (3.3.3-2) unstable; urgency=medium
             entry.timestamp(),
             Some("Mon, 04 Sep 2023 18:13:45 -0500".into())
         );
+        #[cfg(feature = "chrono")]
         assert_eq!(
             entry.datetime(),
             Some("2023-09-04T18:13:45-05:00".parse().unwrap())
@@ -2358,6 +2399,7 @@ breezy (3.3.3-2) unstable; urgency=medium
     }
 
     #[test]
+    #[cfg(feature = "chrono")]
     fn test_new_entry() {
         let mut cl = ChangeLog::new();
         cl.new_entry()
@@ -2367,7 +2409,7 @@ breezy (3.3.3-2) unstable; urgency=medium
             .urgency(Urgency::Low)
             .maintainer(("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()))
             .change_line("* A change.".into())
-            .datetime("2023-09-04T18:13:45-05:00".parse().unwrap())
+            .datetime("Mon, 04 Sep 2023 18:13:45 -0500")
             .finish();
         assert_eq!(
             r###"breezy (3.3.4-1) unstable; urgency=low
@@ -2383,6 +2425,7 @@ breezy (3.3.3-2) unstable; urgency=medium
     }
 
     #[test]
+    #[cfg(feature = "chrono")]
     fn test_new_empty_default() {
         let mut cl = ChangeLog::new();
         cl.new_entry()
@@ -2390,7 +2433,7 @@ breezy (3.3.3-2) unstable; urgency=medium
             .version("3.3.4-1".parse().unwrap())
             .maintainer(("Jelmer Vernooĳ".into(), "jelmer@debian.org".into()))
             .change_line("* A change.".into())
-            .datetime("2023-09-04T18:13:45-05:00".parse().unwrap())
+            .datetime("Mon, 04 Sep 2023 18:13:45 -0500")
             .finish();
         assert_eq!(
             r###"breezy (3.3.4-1) UNRELEASED; urgency=low
@@ -2439,6 +2482,7 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
         assert_eq!(entry.maintainer(), Some("Joe Example".into()));
         assert_eq!(entry.email(), Some("joe@example.com".into()));
         assert_eq!(entry.distributions(), Some(vec!["UNRELEASED".into()]));
+        #[cfg(feature = "chrono")]
         assert_eq!(
             entry.datetime(),
             Some("2019-10-04T02:36:13+00:00".parse().unwrap())
@@ -2525,7 +2569,7 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
                 .try_auto_add_change(
                     &["* And this one is new."],
                     ("Joe Example".to_string(), "joe@example.com".to_string()),
-                    None,
+                    None::<String>,
                     None,
                 )
                 .unwrap();
@@ -2720,6 +2764,7 @@ lintian-brush (0.35) UNRELEASED; urgency=medium
     }
 
     #[test]
+    #[cfg(feature = "chrono")]
     fn test_set_datetime() {
         let mut entry: Entry = r#"breezy (3.3.4-1) unstable; urgency=low
 
