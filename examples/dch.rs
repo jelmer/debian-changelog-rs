@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Jelmer Vernooĳ".to_string(),
             "jelmer@debian.org".to_string(),
         ),
-        None,
+        None::<String>,
         None,
     )?;
     changelog.write(std::io::stdout())?;

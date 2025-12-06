@@ -9,7 +9,7 @@ readme = "README.md"
 authors = [ "Jelmer Vernooij <jelmer@jelmer.uk>",]
 
 [dependencies]
-chrono = "0.4.42"
+chrono = { version = "0.4.42", optional = true }
 debversion = ">=0.4.6, <0.6"
 lazy-regex = ">=3, <4"
 log = "0.4"
@@ -17,7 +17,18 @@ rowan = "0.16.1"
 textwrap = "0.16.2"
 whoami = { version = ">=1.5, <2", default-features = false }
 
+[features]
+default = ["chrono"]
+
 [dev-dependencies]
 flate2 = "1.1"
 maplit = "1.0.2"
 tempfile = "3.23"
+
+[[example]]
+name = "build"
+required-features = ["chrono"]
+
+[[example]]
+name = "dch"
+required-features = ["chrono"]

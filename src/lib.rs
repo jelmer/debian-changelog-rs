@@ -33,7 +33,7 @@ use debversion::Version;
 use rowan::ast::AstNode;
 
 pub use crate::changes::changes_by_author;
-pub use crate::parse::{ChangeLog, Entry, Error, Parse, ParseError, Urgency};
+pub use crate::parse::{ChangeLog, Entry, Error, IntoTimestamp, Parse, ParseError, Urgency};
 
 /// Represents a logical change within a changelog entry.
 ///
@@ -938,16 +938,19 @@ const DEFAULT_DISTRIBUTION: &[&str] = &[UNRELEASED];
 /// * `cl` - The changelog to release
 /// * `distribution` - The distribution to release to. If None, the distribution
 ///   of the previous entry is used.
-/// * `timestamp` - The timestamp to use for the release. If None, the current time is used.
+/// * `timestamp` - The timestamp to use for the release. If None, the current time is used (requires chrono feature).
 /// * `maintainer` - The maintainer to use for the release. If None, the maintainer
 ///   is extracted from the environment.
 ///
 /// # Returns
 /// Whether a release was created.
+///
+/// # Panics
+/// Panics if timestamp is None and the chrono feature is not enabled.
 pub fn release(
     cl: &mut ChangeLog,
     distribution: Option<Vec<String>>,
-    timestamp: Option<chrono::DateTime<chrono::FixedOffset>>,
+    timestamp: Option<impl IntoTimestamp>,
     maintainer: Option<(String, String)>,
 ) -> bool {
     let mut entries = cl.iter();
@@ -967,8 +970,19 @@ pub fn release(
     if first_entry.is_unreleased() == Some(false) {
         take_uploadership(&mut first_entry, maintainer);
         first_entry.set_distributions(distribution);
-        let timestamp = timestamp.unwrap_or(chrono::offset::Utc::now().into());
-        first_entry.set_datetime(timestamp);
+        let timestamp_str = if let Some(ts) = timestamp {
+            ts.into_timestamp()
+        } else {
+            #[cfg(feature = "chrono")]
+            {
+                chrono::offset::Utc::now().into_timestamp()
+            }
+            #[cfg(not(feature = "chrono"))]
+            {
+                panic!("timestamp is required when chrono feature is disabled");
+            }
+        };
+        first_entry.set_timestamp(timestamp_str);
         true
     } else {
         false
@@ -1130,6 +1144,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "chrono")]
     fn test_release_already_released() {
         use crate::parse::ChangeLog;
 
@@ -1145,7 +1160,7 @@ mod tests {
         let result = release(
             &mut changelog,
             Some(vec!["unstable".to_string()]),
-            None,
+            None::<String>,
             None,
         );
 
@@ -1154,6 +1169,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "chrono")]
     fn test_release_unreleased() {
         use crate::parse::ChangeLog;
 
@@ -1169,7 +1185,7 @@ mod tests {
         let result = release(
             &mut changelog,
             Some(vec!["unstable".to_string()]),
-            None,
+            None::<String>,
             Some(("Test User".to_string(), "test@example.com".to_string())),
         );
 
