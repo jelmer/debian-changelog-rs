@@ -1151,7 +1151,7 @@ impl ChangeLog {
         &mut self,
         change: &[&str],
         author: (String, String),
-        datetime: Option<impl IntoTimestamp>,
+        datetime: Option<chrono::DateTime<chrono::FixedOffset>>,
         urgency: Option<Urgency>,
     ) -> Entry {
         self.try_auto_add_change(change, author, datetime, urgency)
