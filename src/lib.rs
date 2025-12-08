@@ -33,7 +33,10 @@ use debversion::Version;
 use rowan::ast::AstNode;
 
 pub use crate::changes::changes_by_author;
-pub use crate::parse::{ChangeLog, Entry, Error, IntoTimestamp, Parse, ParseError, Urgency};
+pub use crate::parse::{
+    ChangeLog, Entry, EntryBody, EntryFooter, EntryHeader, Error, IntoTimestamp, Maintainer,
+    MetadataEntry, MetadataKey, MetadataValue, Parse, ParseError, Timestamp, Urgency,
+};
 
 /// Represents a logical change within a changelog entry.
 ///

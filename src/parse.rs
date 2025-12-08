@@ -712,6 +712,7 @@ ast_node!(MetadataKey, METADATA_KEY);
 ast_node!(MetadataValue, METADATA_VALUE);
 
 impl MetadataEntry {
+    /// Returns the key of the metadata entry.
     pub fn key(&self) -> Option<String> {
         self.0
             .children()
@@ -719,6 +720,7 @@ impl MetadataEntry {
             .map(|k| k.to_string())
     }
 
+    /// Returns the value of the metadata entry.
     pub fn value(&self) -> Option<String> {
         self.0
             .children()
@@ -726,6 +728,7 @@ impl MetadataEntry {
             .map(|k| k.to_string())
     }
 
+    /// Sets the value of the metadata entry.
     pub fn set_value(&mut self, value: &str) {
         let node = self
             .0
@@ -1514,7 +1517,8 @@ impl EntryHeader {
         }
     }
 
-    fn metadata_nodes(&self) -> impl Iterator<Item = MetadataEntry> + '_ {
+    /// Returns an iterator over the metadata entry AST nodes.
+    pub fn metadata_nodes(&self) -> impl Iterator<Item = MetadataEntry> + '_ {
         let node = self.0.children().find(|it| it.kind() == METADATA);
 
         node.into_iter().flat_map(|node| {
@@ -1523,6 +1527,7 @@ impl EntryHeader {
         })
     }
 
+    /// Returns an iterator over the metadata key-value pairs.
     pub fn metadata(&self) -> impl Iterator<Item = (String, String)> + '_ {
         self.metadata_nodes().filter_map(|entry| {
             if let (Some(key), Some(value)) = (entry.key(), entry.value()) {
@@ -1545,6 +1550,7 @@ impl EntryHeader {
 }
 
 impl EntryFooter {
+    /// Returns the email address of the maintainer from the footer.
     pub fn email(&self) -> Option<String> {
         self.0.children_with_tokens().find_map(|it| {
             if let Some(token) = it.as_token() {
@@ -1557,6 +1563,7 @@ impl EntryFooter {
         })
     }
 
+    /// Returns the maintainer name from the footer.
     pub fn maintainer(&self) -> Option<String> {
         self.0
             .children()
@@ -1635,6 +1642,7 @@ impl EntryFooter {
         self.replace_root(new_root);
     }
 
+    /// Returns the timestamp from the footer.
     pub fn timestamp(&self) -> Option<String> {
         self.0
             .children()
