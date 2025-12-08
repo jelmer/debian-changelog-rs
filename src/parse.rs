@@ -616,6 +616,32 @@ pub type SyntaxToken = rowan::SyntaxToken<Lang>;
 #[allow(unused)]
 type SyntaxElement = rowan::NodeOrToken<SyntaxNode, SyntaxToken>;
 
+/// Calculate line and column (both 0-indexed) for the given offset in the tree.
+/// Column is measured in bytes from the start of the line.
+pub(crate) fn line_col_at_offset(node: &SyntaxNode, offset: rowan::TextSize) -> (usize, usize) {
+    let root = node.ancestors().last().unwrap_or_else(|| node.clone());
+    let mut line = 0;
+    let mut last_newline_offset = rowan::TextSize::from(0);
+
+    for element in root.preorder_with_tokens() {
+        if let rowan::WalkEvent::Enter(rowan::NodeOrToken::Token(token)) = element {
+            if token.text_range().start() >= offset {
+                break;
+            }
+
+            // Count newlines and track position of last one
+            for (idx, _) in token.text().match_indices('\n') {
+                line += 1;
+                last_newline_offset =
+                    token.text_range().start() + rowan::TextSize::from((idx + 1) as u32);
+            }
+        }
+    }
+
+    let column: usize = (offset - last_newline_offset).into();
+    (line, column)
+}
+
 macro_rules! ast_node {
     ($ast:ident, $kind:ident) => {
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -647,6 +673,22 @@ macro_rules! ast_node {
             #[allow(dead_code)]
             fn replace_root(&mut self, new_root: SyntaxNode) {
                 self.0 = Self::cast(new_root).unwrap().0;
+            }
+
+            /// Get the line number (0-indexed) where this node starts.
+            pub fn line(&self) -> usize {
+                line_col_at_offset(&self.0, self.0.text_range().start()).0
+            }
+
+            /// Get the column number (0-indexed, in bytes) where this node starts.
+            pub fn column(&self) -> usize {
+                line_col_at_offset(&self.0, self.0.text_range().start()).1
+            }
+
+            /// Get both line and column (0-indexed) where this node starts.
+            /// Returns (line, column) where column is measured in bytes from the start of the line.
+            pub fn line_col(&self) -> (usize, usize) {
+                line_col_at_offset(&self.0, self.0.text_range().start())
             }
         }
 
@@ -1665,11 +1707,18 @@ impl Maintainer {
 }
 
 impl Entry {
-    fn header(&self) -> Option<EntryHeader> {
+    /// Returns the header AST node of the entry.
+    pub fn header(&self) -> Option<EntryHeader> {
         self.0.children().find_map(EntryHeader::cast)
     }
 
-    fn footer(&self) -> Option<EntryFooter> {
+    /// Returns the body AST node of the entry.
+    pub fn body(&self) -> Option<EntryBody> {
+        self.0.children().find_map(EntryBody::cast)
+    }
+
+    /// Returns the footer AST node of the entry.
+    pub fn footer(&self) -> Option<EntryFooter> {
         self.0.children().find_map(EntryFooter::cast)
     }
 
@@ -1729,6 +1778,12 @@ impl Entry {
         self.footer().and_then(|f| f.email())
     }
 
+    /// Returns the maintainer AST node.
+    pub fn maintainer_node(&self) -> Option<Maintainer> {
+        self.footer()
+            .and_then(|f| f.0.children().find_map(Maintainer::cast))
+    }
+
     /// Returns the name of the maintainer.
     pub fn maintainer(&self) -> Option<String> {
         self.footer().and_then(|f| f.maintainer())
@@ -1747,6 +1802,12 @@ impl Entry {
             footer.set_maintainer(maintainer.0);
             footer.set_email(maintainer.1);
         }
+    }
+
+    /// Returns the timestamp AST node.
+    pub fn timestamp_node(&self) -> Option<Timestamp> {
+        self.footer()
+            .and_then(|f| f.0.children().find_map(Timestamp::cast))
     }
 
     /// Returns the timestamp of the entry, as the raw string.
@@ -3496,5 +3557,67 @@ breezy (3.3.3-1) unstable; urgency=low
             "datetime() should not return None for timestamp with incorrect day-of-week"
         );
         assert_eq!(datetime.unwrap().to_rfc3339(), "2011-03-22T16:47:42+00:00");
+    }
+
+    #[test]
+    fn test_line_col() {
+        let text = r#"foo (1.0-1) unstable; urgency=low
+
+  * First change
+
+ -- Maintainer <email@example.com>  Mon, 01 Jan 2024 12:00:00 +0000
+
+bar (2.0-1) experimental; urgency=high
+
+  * Second change
+  * Third change
+
+ -- Another <another@example.com>  Tue, 02 Jan 2024 13:00:00 +0000
+"#;
+        let changelog = text.parse::<ChangeLog>().unwrap();
+
+        // Test changelog root position
+        assert_eq!(changelog.line(), 0);
+        assert_eq!(changelog.column(), 0);
+        assert_eq!(changelog.line_col(), (0, 0));
+
+        // Test entry line numbers
+        let entries: Vec<_> = changelog.iter().collect();
+        assert_eq!(entries.len(), 2);
+
+        // First entry starts at line 0
+        assert_eq!(entries[0].line(), 0);
+        assert_eq!(entries[0].column(), 0);
+        assert_eq!(entries[0].line_col(), (0, 0));
+
+        // Second entry starts at line 6 (after first entry and empty line)
+        assert_eq!(entries[1].line(), 6);
+        assert_eq!(entries[1].column(), 0);
+        assert_eq!(entries[1].line_col(), (6, 0));
+
+        // Test entry components
+        let header = entries[0].header().unwrap();
+        assert_eq!(header.line(), 0);
+        assert_eq!(header.column(), 0);
+
+        let body = entries[0].body().unwrap();
+        assert_eq!(body.line(), 2); // Body starts at first change line
+
+        let footer = entries[0].footer().unwrap();
+        assert_eq!(footer.line(), 4); // Footer line
+
+        // Test maintainer and timestamp nodes
+        let maintainer = entries[0].maintainer_node().unwrap();
+        assert_eq!(maintainer.line(), 4); // On footer line
+
+        let timestamp = entries[0].timestamp_node().unwrap();
+        assert_eq!(timestamp.line(), 4); // On footer line
+
+        // Verify second entry components
+        let header2 = entries[1].header().unwrap();
+        assert_eq!(header2.line(), 6);
+
+        let footer2 = entries[1].footer().unwrap();
+        assert_eq!(footer2.line(), 11);
     }
 }

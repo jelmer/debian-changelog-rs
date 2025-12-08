@@ -105,6 +105,34 @@ impl Change {
         &self.entry
     }
 
+    /// Get the line number (0-indexed) where this change starts.
+    ///
+    /// Returns the line number of the first detail token, or None if the change has no tokens.
+    pub fn line(&self) -> Option<usize> {
+        self.detail_tokens.first().map(|token| {
+            parse::line_col_at_offset(self.entry.syntax(), token.text_range().start()).0
+        })
+    }
+
+    /// Get the column number (0-indexed, in bytes) where this change starts.
+    ///
+    /// Returns the column number of the first detail token, or None if the change has no tokens.
+    pub fn column(&self) -> Option<usize> {
+        self.detail_tokens.first().map(|token| {
+            parse::line_col_at_offset(self.entry.syntax(), token.text_range().start()).1
+        })
+    }
+
+    /// Get both line and column (0-indexed) where this change starts.
+    ///
+    /// Returns (line, column) where column is measured in bytes from the start of the line,
+    /// or None if the change has no tokens.
+    pub fn line_col(&self) -> Option<(usize, usize)> {
+        self.detail_tokens
+            .first()
+            .map(|token| parse::line_col_at_offset(self.entry.syntax(), token.text_range().start()))
+    }
+
     /// Remove this change from its parent entry.
     ///
     /// This removes all DETAIL tokens (ENTRY_BODY nodes) associated with this change
@@ -2915,5 +2943,50 @@ lintian-brush (0.1-1) unstable; urgency=medium
                 "* Second change"
             ]
         );
+    }
+
+    #[test]
+    fn test_change_line_col() {
+        let changelog: ChangeLog = r#"foo (1.0-1) unstable; urgency=low
+
+  * First change
+  * Second change
+
+ -- Maintainer <email@example.com>  Mon, 01 Jan 2024 12:00:00 +0000
+
+bar (2.0-1) experimental; urgency=high
+
+  [ Alice ]
+  * Alice's change
+  * Alice's second change
+
+  [ Bob ]
+  * Bob's change
+
+ -- Another <another@example.com>  Tue, 02 Jan 2024 13:00:00 +0000
+"#
+        .parse()
+        .unwrap();
+
+        let changes = iter_changes_by_author(&changelog);
+
+        // Total: 1 unattributed (first entry) + Alice + Bob = 3 changes
+        assert_eq!(changes.len(), 3);
+
+        // First change (unattributed) should be at line 2 (0-indexed)
+        assert_eq!(changes[0].line(), Some(2));
+        assert_eq!(changes[0].column(), Some(2)); // After "  "
+        assert_eq!(changes[0].line_col(), Some((2, 2)));
+        assert_eq!(changes[0].lines().len(), 2); // Two bullets in first entry
+
+        // Alice's changes - starts at line 10 (after "  [ Alice ]" on line 9)
+        assert_eq!(changes[1].line(), Some(10));
+        assert_eq!(changes[1].column(), Some(2)); // After "  "
+        assert_eq!(changes[1].lines().len(), 2); // Two bullets
+
+        // Bob's changes - starts at line 14 (after blank line and "  [ Bob ]" on line 13)
+        assert_eq!(changes[2].line(), Some(14));
+        assert_eq!(changes[2].column(), Some(2)); // After "  "
+        assert_eq!(changes[2].lines().len(), 1); // One bullet
     }
 }
