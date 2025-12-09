@@ -93,9 +93,22 @@ impl Change {
         self.entry.package()
     }
 
+    /// Get the version this change belongs to, returning an error if the version string is invalid.
+    ///
+    /// Returns:
+    /// - `Some(Ok(version))` if a valid version is found
+    /// - `Some(Err(err))` if a version token exists but cannot be parsed
+    /// - `None` if no version token is present
+    pub fn try_version(&self) -> Option<Result<Version, debversion::ParseError>> {
+        self.entry.try_version()
+    }
+
     /// Get the version this change belongs to.
+    ///
+    /// Note: This method silently returns `None` if the version string is invalid.
+    /// Consider using [`try_version`](Self::try_version) instead to handle parsing errors properly.
     pub fn version(&self) -> Option<Version> {
-        self.entry.version()
+        self.try_version().and_then(|r| r.ok())
     }
 
     /// Check if this change is attributed to a specific author.

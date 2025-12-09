@@ -177,3 +177,46 @@ fn test_parse_inequality_different_errors() {
     // They should not be equal because they have different green nodes
     assert_ne!(parsed1, parsed2);
 }
+
+#[test]
+fn test_invalid_version_no_panic() {
+    // Test with an invalid version string that should not panic
+    let changelog_text = r#"test (2.0.37+cvs.JCW_PRE2_2037-1) unstable; urgency=low
+
+  * Initial release.
+
+ -- Test User <test@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#;
+
+    let parsed = ChangeLog::parse(changelog_text);
+
+    // If parsing fails, that's okay - just shouldn't panic
+    if !parsed.ok() {
+        // Expected to have errors with relaxed parsing
+        assert!(!parsed.errors().is_empty());
+    } else {
+        // If it parses successfully, accessing the entry should also not panic
+        if let Some(entry) = parsed.tree().iter().next() {
+            // Accessing version should not panic - this is the critical test
+            let version_result = entry.version();
+            assert_eq!(version_result, None, "Invalid version should return None");
+
+            // try_version should return Some(Err(...)) for invalid version strings
+            let try_result = entry.try_version();
+            match try_result {
+                Some(Err(err)) => {
+                    // Expected: version token exists but parsing failed
+                    assert!(err.to_string().contains("Invalid version string") ||
+                            err.to_string().contains("2.0.37+cvs.JCW_PRE2_2037-1"),
+                            "Error should mention invalid version: {}", err);
+                }
+                Some(Ok(_)) => {
+                    panic!("Expected parsing to fail for invalid version string");
+                }
+                None => {
+                    panic!("Expected Some(Err(...)) because version token exists but is invalid");
+                }
+            }
+        }
+    }
+}
