@@ -1279,17 +1279,30 @@ impl FromStr for Entry {
 }
 
 impl EntryHeader {
-    /// Returns the version of the entry.
-    pub fn version(&self) -> Option<Version> {
+    /// Returns the version of the entry, returning an error if the version string is invalid.
+    ///
+    /// Returns:
+    /// - `Some(Ok(version))` if a valid version is found
+    /// - `Some(Err(err))` if a version token exists but cannot be parsed
+    /// - `None` if no version token is present
+    pub fn try_version(&self) -> Option<Result<Version, debversion::ParseError>> {
         self.0.children_with_tokens().find_map(|it| {
             if let Some(token) = it.as_token() {
                 if token.kind() == VERSION {
                     let text = token.text()[1..token.text().len() - 1].to_string();
-                    return Some(text.parse().unwrap());
+                    return Some(text.parse());
                 }
             }
             None
         })
+    }
+
+    /// Returns the version of the entry.
+    ///
+    /// Note: This method silently returns `None` if the version string is invalid.
+    /// Consider using [`try_version`](Self::try_version) instead to handle parsing errors properly.
+    pub fn version(&self) -> Option<Version> {
+        self.try_version().and_then(|r| r.ok())
     }
 
     /// Returns the package name of the entry.
@@ -1747,9 +1760,22 @@ impl Entry {
         }
     }
 
-    /// Return the version of the entry.
+    /// Returns the version of the entry, returning an error if the version string is invalid.
+    ///
+    /// Returns:
+    /// - `Some(Ok(version))` if a valid version is found
+    /// - `Some(Err(err))` if a version token exists but cannot be parsed
+    /// - `None` if no version token is present or no header exists
+    pub fn try_version(&self) -> Option<Result<Version, debversion::ParseError>> {
+        self.header().and_then(|h| h.try_version())
+    }
+
+    /// Returns the version of the entry.
+    ///
+    /// Note: This method silently returns `None` if the version string is invalid.
+    /// Consider using [`try_version`](Self::try_version) instead to handle parsing errors properly.
     pub fn version(&self) -> Option<Version> {
-        self.header().and_then(|h| h.version())
+        self.try_version().and_then(|r| r.ok())
     }
 
     /// Set the version of the entry.
