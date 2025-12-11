@@ -1143,6 +1143,7 @@ impl ChangeLog {
     /// # Arguments
     /// * `change` - The change to add, e.g. &["* Fix a bug"]
     /// * `author` - The author of the change, e.g. ("John Doe", "john@example")
+    #[cfg(feature = "chrono")]
     #[deprecated(
         since = "0.2.10",
         note = "Use try_auto_add_change for proper error handling"

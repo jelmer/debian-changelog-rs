@@ -206,9 +206,12 @@ fn test_invalid_version_no_panic() {
             match try_result {
                 Some(Err(err)) => {
                     // Expected: version token exists but parsing failed
-                    assert!(err.to_string().contains("Invalid version string") ||
-                            err.to_string().contains("2.0.37+cvs.JCW_PRE2_2037-1"),
-                            "Error should mention invalid version: {}", err);
+                    assert!(
+                        err.to_string().contains("Invalid version string")
+                            || err.to_string().contains("2.0.37+cvs.JCW_PRE2_2037-1"),
+                        "Error should mention invalid version: {}",
+                        err
+                    );
                 }
                 Some(Ok(_)) => {
                     panic!("Expected parsing to fail for invalid version string");
