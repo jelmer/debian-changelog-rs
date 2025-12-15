@@ -556,6 +556,64 @@ fn test_find_thanks() {
     );
 }
 
+/// Find Debian bugs that are closed in a changelog entry
+///
+/// Looks for patterns like `Closes: #123456` or `closes: #123456, #789012`
+///
+/// # Example
+///
+/// ```
+/// let changes = vec!["* Fix bug. Closes: #123456"];
+/// let bugs = debian_changelog::changes::find_closed_debian_bugs(&changes);
+/// assert!(bugs.contains(&123456));
+/// ```
+pub fn find_closed_debian_bugs(changes: &[&str]) -> std::collections::HashSet<u32> {
+    let regex = lazy_regex::regex!(r"[Cc]loses:\s*[#\d\s,]+");
+    let bug_regex = lazy_regex::regex!(r"\d+");
+
+    changes_by_author(changes.iter().copied())
+        .flat_map(|(_, _, lines)| {
+            lines.into_iter().flat_map(|line| {
+                regex.find_iter(line).flat_map(|closes_match| {
+                    let closes_text = closes_match.as_str();
+                    bug_regex
+                        .find_iter(closes_text)
+                        .filter_map(|m| m.as_str().parse::<u32>().ok())
+                })
+            })
+        })
+        .collect()
+}
+
+/// Find Launchpad bugs that are closed in a changelog entry
+///
+/// Looks for patterns like `LP: #123456` or `lp: #123456, #789012`
+///
+/// # Example
+///
+/// ```
+/// let changes = vec!["* Fix bug. LP: #123456"];
+/// let bugs = debian_changelog::changes::find_closed_launchpad_bugs(&changes);
+/// assert!(bugs.contains(&123456));
+/// ```
+pub fn find_closed_launchpad_bugs(changes: &[&str]) -> std::collections::HashSet<u32> {
+    let regex = lazy_regex::regex!(r"[Ll][Pp]:\s*[#\d\s,]+");
+    let bug_regex = lazy_regex::regex!(r"\d+");
+
+    changes_by_author(changes.iter().copied())
+        .flat_map(|(_, _, lines)| {
+            lines.into_iter().flat_map(|line| {
+                regex.find_iter(line).flat_map(|lp_match| {
+                    let lp_text = lp_match.as_str();
+                    bug_regex
+                        .find_iter(lp_text)
+                        .filter_map(|m| m.as_str().parse::<u32>().ok())
+                })
+            })
+        })
+        .collect()
+}
+
 /// Check if all lines in a changelog entry are prefixed with a sha.
 ///
 /// This is generally done by gbp-dch(1).
@@ -568,6 +626,91 @@ pub fn all_sha_prefixed(changes: &[&str]) -> bool {
                 .flat_map(|ls| ls.into_iter().map(|(_, l)| l))
         })
         .all(|line| lazy_regex::regex_is_match!(r"^\* \[[0-9a-f]{7}\] ", line))
+}
+
+#[test]
+fn test_find_closed_debian_bugs() {
+    assert_eq!(find_closed_debian_bugs(&[]), maplit::hashset! {});
+    assert_eq!(
+        find_closed_debian_bugs(&["* Do foo", "* Do bar"]),
+        maplit::hashset! {}
+    );
+    assert_eq!(
+        find_closed_debian_bugs(&["* Fix bug. Closes: #123456"]),
+        maplit::hashset! {123456}
+    );
+    assert_eq!(
+        find_closed_debian_bugs(&["* Fix bug. closes: #123456"]),
+        maplit::hashset! {123456}
+    );
+    assert_eq!(
+        find_closed_debian_bugs(&["* Fix bugs. Closes: #123456, #789012"]),
+        maplit::hashset! {123456, 789012}
+    );
+    assert_eq!(
+        find_closed_debian_bugs(&["* Fix bugs. Closes: #123456,#789012"]),
+        maplit::hashset! {123456, 789012}
+    );
+    assert_eq!(
+        find_closed_debian_bugs(&["* Fix bugs. Closes: 123456, 789012"]),
+        maplit::hashset! {123456, 789012}
+    );
+    assert_eq!(
+        find_closed_debian_bugs(&["* Fix bugs. Closes: #123456 #789012"]),
+        maplit::hashset! {123456, 789012}
+    );
+    assert_eq!(
+        find_closed_debian_bugs(&[
+            "* Fix bug 1. Closes: #123456",
+            "* Fix bug 2. Closes: #789012"
+        ]),
+        maplit::hashset! {123456, 789012}
+    );
+    assert_eq!(
+        find_closed_debian_bugs(&["* Fix bug. (Closes: #123456)"]),
+        maplit::hashset! {123456}
+    );
+}
+
+#[test]
+fn test_find_closed_launchpad_bugs() {
+    assert_eq!(find_closed_launchpad_bugs(&[]), maplit::hashset! {});
+    assert_eq!(
+        find_closed_launchpad_bugs(&["* Do foo", "* Do bar"]),
+        maplit::hashset! {}
+    );
+    assert_eq!(
+        find_closed_launchpad_bugs(&["* Fix bug. LP: #123456"]),
+        maplit::hashset! {123456}
+    );
+    assert_eq!(
+        find_closed_launchpad_bugs(&["* Fix bug. lp: #123456"]),
+        maplit::hashset! {123456}
+    );
+    assert_eq!(
+        find_closed_launchpad_bugs(&["* Fix bugs. LP: #123456, #789012"]),
+        maplit::hashset! {123456, 789012}
+    );
+    assert_eq!(
+        find_closed_launchpad_bugs(&["* Fix bugs. LP: #123456,#789012"]),
+        maplit::hashset! {123456, 789012}
+    );
+    assert_eq!(
+        find_closed_launchpad_bugs(&["* Fix bugs. LP: 123456, 789012"]),
+        maplit::hashset! {123456, 789012}
+    );
+    assert_eq!(
+        find_closed_launchpad_bugs(&["* Fix bugs. LP: #123456 #789012"]),
+        maplit::hashset! {123456, 789012}
+    );
+    assert_eq!(
+        find_closed_launchpad_bugs(&["* Fix bug 1. LP: #123456", "* Fix bug 2. LP: #789012"]),
+        maplit::hashset! {123456, 789012}
+    );
+    assert_eq!(
+        find_closed_launchpad_bugs(&["* Fix bug. (LP: #123456)"]),
+        maplit::hashset! {123456}
+    );
 }
 
 #[test]
