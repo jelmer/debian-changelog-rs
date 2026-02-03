@@ -15,7 +15,7 @@ lazy-regex = ">=3, <4"
 log = "0.4"
 rowan = "0.16.1"
 textwrap = "0.16.2"
-whoami = { version = ">=1.5, <2", default-features = false }
+whoami = { version = ">=1.5, <3", default-features = false }
 
 [features]
 default = ["chrono"]
