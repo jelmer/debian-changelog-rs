@@ -23,7 +23,7 @@ default = ["chrono"]
 [dev-dependencies]
 flate2 = "1.1"
 maplit = "1.0.2"
-tempfile = "3.24"
+tempfile = "3.25"
 
 [[example]]
 name = "build"
