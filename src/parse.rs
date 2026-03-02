@@ -1023,6 +1023,51 @@ impl ChangeLog {
         self.iter()
     }
 
+    /// Find the entry that contains the given text position.
+    ///
+    /// This uses the CST to efficiently locate the entry containing the position
+    /// without iterating through all entries (O(log n) complexity).
+    ///
+    /// # Arguments
+    /// * `offset` - The text offset (byte position) to search for
+    ///
+    /// # Returns
+    /// The Entry containing the position, or None if the position is outside all entries
+    pub fn entry_at_offset(&self, offset: rowan::TextSize) -> Option<Entry> {
+        // Use rowan's token_at_offset for efficient O(log n) lookup
+        let token = self.0.token_at_offset(offset).right_biased()?;
+
+        // Walk up the tree to find the Entry node
+        token.parent_ancestors().find_map(Entry::cast)
+    }
+
+    /// Find all entries that intersect with the given text range.
+    ///
+    /// This uses the sequential nature of entries and early termination to efficiently
+    /// find only the entries that intersect with the range, without scanning the entire file.
+    ///
+    /// # Arguments
+    /// * `range` - The text range to search within
+    ///
+    /// # Returns
+    /// An iterator over entries that intersect with the range
+    pub fn entries_in_range(&self, range: rowan::TextRange) -> impl Iterator<Item = Entry> + '_ {
+        // Entries are direct children of the root and are sequential
+        // We can use early termination: skip entries before the range, yield intersecting entries,
+        // and stop once we pass the range
+        self.0
+            .children()
+            .filter_map(Entry::cast)
+            .skip_while(move |entry| {
+                // Skip entries that end before our range starts
+                entry.syntax().text_range().end() <= range.start()
+            })
+            .take_while(move |entry| {
+                // Stop once we find an entry that starts after our range ends
+                entry.syntax().text_range().start() < range.end()
+            })
+    }
+
     /// Create a new, empty entry.
     pub fn new_empty_entry(&mut self) -> EntryBuilder {
         EntryBuilder {
@@ -3654,5 +3699,194 @@ bar (2.0-1) experimental; urgency=high
 
         let footer2 = entries[1].footer().unwrap();
         assert_eq!(footer2.line(), 11);
+    }
+
+    #[test]
+    fn test_entry_at_offset() {
+        let text = r#"foo (1.0-1) unstable; urgency=low
+
+  * First change
+
+ -- Maintainer <email@example.com>  Mon, 01 Jan 2024 12:00:00 +0000
+
+bar (2.0-1) experimental; urgency=high
+
+  * Second change
+  * Third change
+
+ -- Another <another@example.com>  Tue, 02 Jan 2024 13:00:00 +0000
+"#;
+        let changelog = text.parse::<ChangeLog>().unwrap();
+
+        // Test offset at the start of first entry
+        let entry = changelog.entry_at_offset(0.into()).unwrap();
+        assert_eq!(entry.package(), Some("foo".to_string()));
+
+        // Test offset in the middle of first entry (e.g., at "First change")
+        let first_change_offset = text.find("First change").unwrap() as u32;
+        let entry = changelog
+            .entry_at_offset(first_change_offset.into())
+            .unwrap();
+        assert_eq!(entry.package(), Some("foo".to_string()));
+
+        // Test offset at the footer of first entry
+        let first_footer_offset = text.find("Maintainer").unwrap() as u32;
+        let entry = changelog
+            .entry_at_offset(first_footer_offset.into())
+            .unwrap();
+        assert_eq!(entry.package(), Some("foo".to_string()));
+
+        // Test offset at the start of second entry
+        let second_entry_offset = text.find("bar (2.0-1)").unwrap() as u32;
+        let entry = changelog
+            .entry_at_offset(second_entry_offset.into())
+            .unwrap();
+        assert_eq!(entry.package(), Some("bar".to_string()));
+
+        // Test offset in the middle of second entry
+        let second_change_offset = text.find("Second change").unwrap() as u32;
+        let entry = changelog
+            .entry_at_offset(second_change_offset.into())
+            .unwrap();
+        assert_eq!(entry.package(), Some("bar".to_string()));
+
+        // Test offset at the very end of the changelog
+        let end_offset = text.len() as u32;
+        let entry = changelog.entry_at_offset(end_offset.into());
+        // This should still find the last entry since the offset is at the end
+        assert!(entry.is_some());
+    }
+
+    #[test]
+    fn test_entry_at_offset_empty_changelog() {
+        let text = "";
+        let changelog = text.parse::<ChangeLog>().unwrap();
+
+        // Test with offset 0 on empty changelog
+        let entry = changelog.entry_at_offset(0.into());
+        assert!(entry.is_none());
+    }
+
+    #[test]
+    fn test_entries_in_range() {
+        let text = r#"foo (1.0-1) unstable; urgency=low
+
+  * First change
+
+ -- Maintainer <email@example.com>  Mon, 01 Jan 2024 12:00:00 +0000
+
+bar (2.0-1) experimental; urgency=high
+
+  * Second change
+  * Third change
+
+ -- Another <another@example.com>  Tue, 02 Jan 2024 13:00:00 +0000
+
+baz (3.0-1) unstable; urgency=medium
+
+  * Fourth change
+
+ -- Third <third@example.com>  Wed, 03 Jan 2024 14:00:00 +0000
+"#;
+        let changelog = text.parse::<ChangeLog>().unwrap();
+
+        // Test range covering just the first entry
+        let first_entry_start = 0u32;
+        let first_entry_end = text.find("bar (2.0-1)").unwrap() as u32;
+        let range = rowan::TextRange::new(first_entry_start.into(), first_entry_end.into());
+        let entries: Vec<_> = changelog.entries_in_range(range).collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].package(), Some("foo".to_string()));
+
+        // Test range covering the first two entries
+        let second_entry_end = text.find("baz (3.0-1)").unwrap() as u32;
+        let range = rowan::TextRange::new(first_entry_start.into(), second_entry_end.into());
+        let entries: Vec<_> = changelog.entries_in_range(range).collect();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].package(), Some("foo".to_string()));
+        assert_eq!(entries[1].package(), Some("bar".to_string()));
+
+        // Test range covering all three entries
+        let range = rowan::TextRange::new(0.into(), (text.len() as u32).into());
+        let entries: Vec<_> = changelog.entries_in_range(range).collect();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].package(), Some("foo".to_string()));
+        assert_eq!(entries[1].package(), Some("bar".to_string()));
+        assert_eq!(entries[2].package(), Some("baz".to_string()));
+
+        // Test range in the middle of the second entry
+        let second_change_start = text.find("Second change").unwrap() as u32;
+        let third_change_end = (text.find("Third change").unwrap() + "Third change".len()) as u32;
+        let range = rowan::TextRange::new(second_change_start.into(), third_change_end.into());
+        let entries: Vec<_> = changelog.entries_in_range(range).collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].package(), Some("bar".to_string()));
+
+        // Test range starting in the middle of first entry and ending in the middle of second
+        let first_change_offset = text.find("First change").unwrap() as u32;
+        let second_change_offset = text.find("Second change").unwrap() as u32;
+        let range =
+            rowan::TextRange::new(first_change_offset.into(), second_change_offset.into());
+        let entries: Vec<_> = changelog.entries_in_range(range).collect();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].package(), Some("foo".to_string()));
+        assert_eq!(entries[1].package(), Some("bar".to_string()));
+    }
+
+    #[test]
+    fn test_entries_in_range_empty() {
+        let text = r#"foo (1.0-1) unstable; urgency=low
+
+  * First change
+
+ -- Maintainer <email@example.com>  Mon, 01 Jan 2024 12:00:00 +0000
+
+bar (2.0-1) experimental; urgency=high
+
+  * Second change
+
+ -- Another <another@example.com>  Tue, 02 Jan 2024 13:00:00 +0000
+"#;
+        let changelog = text.parse::<ChangeLog>().unwrap();
+
+        // Test with a range that's before the first entry (shouldn't happen in practice, but test it)
+        // Since the first entry starts at 0, we can't have a range before it, so test an empty range
+        let range = rowan::TextRange::new(0.into(), 0.into());
+        let entries: Vec<_> = changelog.entries_in_range(range).collect();
+        assert_eq!(entries.len(), 0);
+
+        // Test with empty changelog
+        let empty_text = "";
+        let empty_changelog = empty_text.parse::<ChangeLog>().unwrap();
+        let range = rowan::TextRange::new(0.into(), 0.into());
+        let entries: Vec<_> = empty_changelog.entries_in_range(range).collect();
+        assert_eq!(entries.len(), 0);
+    }
+
+    #[test]
+    fn test_entries_in_range_partial_overlap() {
+        let text = r#"foo (1.0-1) unstable; urgency=low
+
+  * First change
+
+ -- Maintainer <email@example.com>  Mon, 01 Jan 2024 12:00:00 +0000
+
+bar (2.0-1) experimental; urgency=high
+
+  * Second change
+
+ -- Another <another@example.com>  Tue, 02 Jan 2024 13:00:00 +0000
+"#;
+        let changelog = text.parse::<ChangeLog>().unwrap();
+
+        // Test with a range that starts before the first entry ends and goes into the second
+        let first_change_offset = text.find("First change").unwrap() as u32;
+        let bar_header_end = (text.find("bar (2.0-1)").unwrap() + "bar (2.0-1)".len()) as u32;
+        let range = rowan::TextRange::new(first_change_offset.into(), bar_header_end.into());
+        let entries: Vec<_> = changelog.entries_in_range(range).collect();
+        // Should return both entries since the range intersects with both
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].package(), Some("foo".to_string()));
+        assert_eq!(entries[1].package(), Some("bar".to_string()));
     }
 }
