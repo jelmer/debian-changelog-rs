@@ -136,22 +136,22 @@ fn test_parse_tree_mut() {
 }
 
 #[test]
-#[should_panic(expected = "tried to get tree with errors")]
-fn test_parse_tree_panics_with_errors() {
+fn test_parse_tree_with_errors_returns_partial_tree() {
     let invalid_text = "INVALID";
     let parsed = ChangeLog::parse(invalid_text);
 
-    // This should panic because there are errors
+    assert!(!parsed.errors().is_empty());
+    // tree() should still return a (partial) tree without panicking
     let _tree = parsed.tree();
 }
 
 #[test]
-#[should_panic(expected = "tried to get tree with errors")]
-fn test_parse_tree_mut_panics_with_errors() {
+fn test_parse_tree_mut_with_errors_returns_partial_tree() {
     let invalid_text = "INVALID";
     let parsed = ChangeLog::parse(invalid_text);
 
-    // This should panic because there are errors
+    assert!(!parsed.errors().is_empty());
+    // tree_mut() should still return a (partial) tree without panicking
     let _tree = parsed.tree_mut();
 }
 

@@ -244,16 +244,15 @@ impl<T> Parse<T> {
         }
     }
 
-    /// Get the parsed syntax tree, panicking if there are errors
+    /// Get the parsed syntax tree.
+    ///
+    /// The tree is returned even when there are parse errors, since the parser
+    /// always produces a valid (possibly incomplete) green tree. Callers that
+    /// need to distinguish error-free parses should check [`errors()`] first.
     pub fn tree(&self) -> T
     where
         T: AstNode<Language = Lang>,
     {
-        assert!(
-            self.errors.is_empty(),
-            "tried to get tree with errors: {:?}",
-            self.errors
-        );
         let node = SyntaxNode::new_root(self.green.clone());
         T::cast(node).expect("root node has wrong type")
     }
@@ -263,16 +262,15 @@ impl<T> Parse<T> {
         SyntaxNode::new_root(self.green.clone())
     }
 
-    /// Get a mutable parsed syntax tree, panicking if there are errors
+    /// Get a mutable parsed syntax tree.
+    ///
+    /// The tree is returned even when there are parse errors, since the parser
+    /// always produces a valid (possibly incomplete) green tree. Callers that
+    /// need to distinguish error-free parses should check [`errors()`] first.
     pub fn tree_mut(&self) -> T
     where
         T: AstNode<Language = Lang>,
     {
-        assert!(
-            self.errors.is_empty(),
-            "tried to get tree with errors: {:?}",
-            self.errors
-        );
         let node = SyntaxNode::new_root_mut(self.green.clone());
         T::cast(node).expect("root node has wrong type")
     }
