@@ -303,4 +303,48 @@ mod tests {
             vec![(INDENT, "  "), (DETAIL, "\t  ")]
         );
     }
+
+    #[test]
+    fn test_lex_empty_bullet() {
+        // A line with "  * \n" (bullet with trailing space, no content)
+        assert_eq!(
+            super::lex("  * \n")
+                .iter()
+                .map(|(kind, text)| (*kind, text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(INDENT, "  "), (DETAIL, "* "), (NEWLINE, "\n"),]
+        );
+    }
+
+    #[test]
+    fn test_lex_trailing_space_line() {
+        // A line with just " \n" (single space then newline) should produce
+        // INDENT " " followed by NEWLINE
+        assert_eq!(
+            super::lex("  * detail\n\n \n\nbar (1.0) unstable; urgency=low\n")
+                .iter()
+                .map(|(kind, text)| (*kind, text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (INDENT, "  "),
+                (DETAIL, "* detail"),
+                (NEWLINE, "\n"),
+                (NEWLINE, "\n"),
+                (INDENT, " "),
+                (NEWLINE, "\n"),
+                (NEWLINE, "\n"),
+                (IDENTIFIER, "bar"),
+                (WHITESPACE, " "),
+                (VERSION, "(1.0)"),
+                (WHITESPACE, " "),
+                (IDENTIFIER, "unstable"),
+                (SEMICOLON, ";"),
+                (WHITESPACE, " "),
+                (IDENTIFIER, "urgency"),
+                (EQUALS, "="),
+                (IDENTIFIER, "low"),
+                (NEWLINE, "\n"),
+            ]
+        );
+    }
 }
