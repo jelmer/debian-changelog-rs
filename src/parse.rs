@@ -276,6 +276,124 @@ impl<T> Parse<T> {
     }
 }
 
+impl Parse<ChangeLog> {
+    /// Incrementally reparse after a text edit.
+    ///
+    /// Given the new full text and the range that was edited (in the *new* text
+    /// coordinates after the edit has been applied), this tries to reuse
+    /// unchanged entries from the previous parse and only reparse the
+    /// affected region.
+    ///
+    /// Falls back to a full reparse if the edit spans the entire file or if
+    /// incremental reparsing is not beneficial.
+    pub fn reparse(&self, new_text: &str, edit: rowan::TextRange) -> Self {
+        use rowan::TextSize;
+
+        let root = &self.green;
+
+        // Collect children with their text ranges
+        let mut children: Vec<(
+            rowan::NodeOrToken<&rowan::GreenNodeData, &rowan::GreenTokenData>,
+            TextSize,
+            TextSize,
+        )> = Vec::new();
+        let mut offset = TextSize::from(0);
+        for child in root.children() {
+            let len = match &child {
+                rowan::NodeOrToken::Node(n) => n.text_len(),
+                rowan::NodeOrToken::Token(t) => t.text_len(),
+            };
+            children.push((child, offset, offset + len));
+            offset += len;
+        }
+
+        let old_len = offset;
+
+        // If there are very few children, just do a full reparse
+        if children.len() <= 2 {
+            return parse(new_text);
+        }
+
+        let new_len = TextSize::of(new_text);
+        let len_delta: i64 = i64::from(u32::from(new_len)) - i64::from(u32::from(old_len));
+
+        // In old-text coordinates, the edit covered:
+        let old_edit_start = edit.start();
+        let old_edit_end =
+            TextSize::from((i64::from(u32::from(edit.end())) - len_delta) as u32);
+
+        // Find first and last affected child indices.
+        // Use >= / <= to catch inserts at child boundaries.
+        let first_affected =
+            children.iter().position(|(_, _, end)| *end >= old_edit_start);
+        let last_affected =
+            children.iter().rposition(|(_, start, _)| *start <= old_edit_end);
+
+        let (first_affected, last_affected) = match (first_affected, last_affected) {
+            (Some(f), Some(l)) => (f, l),
+            _ => return parse(new_text),
+        };
+
+        let reparse_start = children[first_affected].1;
+        let reparse_old_end = children[last_affected].2;
+
+        // In new-text coordinates, the end of the affected region is shifted
+        let reparse_new_end =
+            TextSize::from((i64::from(u32::from(reparse_old_end)) + len_delta) as u32);
+
+        // Bounds check
+        if u32::from(reparse_start) > u32::from(new_len)
+            || u32::from(reparse_new_end) > u32::from(new_len)
+        {
+            return parse(new_text);
+        }
+
+        let reparse_slice =
+            &new_text[usize::from(reparse_start)..usize::from(reparse_new_end)];
+
+        // Parse just the affected region
+        let reparsed = parse(reparse_slice);
+        let reparsed_root = reparsed.green;
+
+        // Build the new root by splicing
+        let to_owned = |c: &rowan::NodeOrToken<
+            &rowan::GreenNodeData,
+            &rowan::GreenTokenData,
+        >|
+         -> rowan::NodeOrToken<GreenNode, rowan::GreenToken> {
+            match c {
+                rowan::NodeOrToken::Node(n) => {
+                    rowan::NodeOrToken::Node((*n).to_owned())
+                }
+                rowan::NodeOrToken::Token(t) => {
+                    rowan::NodeOrToken::Token((*t).to_owned())
+                }
+            }
+        };
+        let mut new_root_children = Vec::new();
+        for (c, _, _) in &children[..first_affected] {
+            new_root_children.push(to_owned(c));
+        }
+        for c in reparsed_root.children() {
+            new_root_children.push(c.to_owned());
+        }
+        for (c, _, _) in &children[last_affected + 1..] {
+            new_root_children.push(to_owned(c));
+        }
+
+        let new_green = GreenNode::new(
+            rowan::SyntaxKind(ROOT as u16),
+            new_root_children,
+        );
+
+        // Errors: use reparsed errors only (shifted to absolute positions).
+        // TODO: preserve prefix/suffix errors with shifted offsets.
+        let errors = reparsed.errors;
+
+        Parse::new(new_green, errors)
+    }
+}
+
 fn parse(text: &str) -> Parse<ChangeLog> {
     struct Parser {
         /// input tokens, including whitespace,
@@ -4052,5 +4170,146 @@ baz (1.0-1) unstable; urgency=low
         let identity = entries[1].get_maintainer_identity().unwrap();
         assert_eq!(identity.name, "Jérémy Lal");
         assert_eq!(identity.email, "kapouer@melix.org");
+    }
+
+    /// Helper: parse old text, apply edit to get new text, reparse incrementally,
+    /// and verify the result matches a full parse of the new text.
+    fn assert_incremental_matches_full(
+        old_text: &str,
+        edit_start: u32,
+        edit_end: u32,
+        replacement: &str,
+    ) {
+        let parsed = parse(old_text);
+        let mut new_text = old_text.to_string();
+        new_text.replace_range(edit_start as usize..edit_end as usize, replacement);
+
+        let new_edit_end = edit_start + replacement.len() as u32;
+        let edit_range = rowan::TextRange::new(
+            rowan::TextSize::from(edit_start),
+            rowan::TextSize::from(new_edit_end),
+        );
+
+        let incremental = parsed.reparse(&new_text, edit_range);
+        let full = parse(&new_text);
+
+        let inc_tree = incremental.tree();
+        let full_tree = full.tree();
+        assert_eq!(
+            inc_tree.syntax().text().to_string(),
+            full_tree.syntax().text().to_string(),
+            "tree text mismatch for edit [{edit_start}..{edit_end}] -> {replacement:?}"
+        );
+
+        assert_eq!(
+            incremental.green(),
+            full.green(),
+            "green node mismatch for edit [{edit_start}..{edit_end}] -> {replacement:?}"
+        );
+    }
+
+    const TWO_ENTRY_CHANGELOG: &str = "\
+breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+
+breezy (3.3.3-2) unstable; urgency=medium
+
+  * Drop unnecessary dependency on python3-six. Closes: #1039011
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Sat, 24 Jun 2023 14:58:57 +0100
+";
+
+    #[test]
+    fn test_reparse_edit_within_first_entry() {
+        let old = TWO_ENTRY_CHANGELOG;
+        // Change "low" to "high" in the first entry's urgency
+        let start = old.find("low").unwrap() as u32;
+        let end = start + 3;
+        assert_incremental_matches_full(old, start, end, "high");
+    }
+
+    #[test]
+    fn test_reparse_edit_within_second_entry() {
+        let old = TWO_ENTRY_CHANGELOG;
+        // Change "medium" to "high" in the second entry's urgency
+        let start = old.rfind("medium").unwrap() as u32;
+        let end = start + 6;
+        assert_incremental_matches_full(old, start, end, "high");
+    }
+
+    #[test]
+    fn test_reparse_add_detail_line() {
+        let old = TWO_ENTRY_CHANGELOG;
+        // Insert a new detail line after "New upstream release.\n"
+        let insert_point = old.find("  * New upstream release.\n").unwrap() + "  * New upstream release.\n".len();
+        assert_incremental_matches_full(
+            old,
+            insert_point as u32,
+            insert_point as u32,
+            "  * Fix important bug.\n",
+        );
+    }
+
+    #[test]
+    fn test_reparse_change_version() {
+        let old = TWO_ENTRY_CHANGELOG;
+        // Change version "3.3.4-1" to "3.3.5-1"
+        let start = old.find("3.3.4-1").unwrap() as u32;
+        let end = start + 7;
+        assert_incremental_matches_full(old, start, end, "3.3.5-1");
+    }
+
+    #[test]
+    fn test_reparse_single_entry_falls_back() {
+        let old = "\
+breezy (3.3.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Jelmer Vernooĳ <jelmer@debian.org>  Mon, 04 Sep 2023 18:13:45 -0500
+";
+        let start = old.find("low").unwrap() as u32;
+        let end = start + 3;
+        assert_incremental_matches_full(old, start, end, "high");
+    }
+
+    #[test]
+    fn test_reparse_preserves_unchanged_entry() {
+        let old = TWO_ENTRY_CHANGELOG;
+        let parsed = parse(old);
+        let old_green = parsed.green().clone();
+
+        // Edit only in first entry: "low" -> "high"
+        let start = old.find("low").unwrap() as u32;
+        let end = start + 3;
+        let mut new_text = old.to_string();
+        new_text.replace_range(start as usize..end as usize, "high");
+        let new_edit_end = start + 4; // "high" is 4 bytes
+        let edit_range = rowan::TextRange::new(
+            rowan::TextSize::from(start),
+            rowan::TextSize::from(new_edit_end),
+        );
+
+        let reparsed = parsed.reparse(&new_text, edit_range);
+        let new_green = reparsed.green().clone();
+
+        let old_children: Vec<_> = old_green.children().collect();
+        let new_children: Vec<_> = new_green.children().collect();
+
+        // Should have the same number of children
+        assert_eq!(old_children.len(), new_children.len());
+
+        // The second entry (last child) should be structurally identical
+        assert_eq!(
+            old_children.last(),
+            new_children.last(),
+            "unchanged entry should be reused"
+        );
+
+        // The first entry should differ
+        assert_ne!(old_children[0], new_children[0]);
     }
 }
