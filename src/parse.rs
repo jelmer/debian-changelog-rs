@@ -552,7 +552,7 @@ fn parse(text: &str) -> Parse<ChangeLog> {
                     }
                     t => {
                         self.error(format!("unexpected token {:?}", t));
-                        break;
+                        self.bump();
                     }
                 }
             }
@@ -3886,5 +3886,171 @@ bar (2.0-1) experimental; urgency=high
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].package(), Some("foo".to_string()));
         assert_eq!(entries[1].package(), Some("bar".to_string()));
+    }
+
+    #[test]
+    fn test_parse_entry_missing_footer() {
+        // When a single entry is missing a footer, subsequent entries should still
+        // be parsed correctly.
+        let changelog: ChangeLog = r#"foo (1.0-1) unstable; urgency=low
+
+  * First change
+
+bar (2.0-1) unstable; urgency=low
+
+  * Second change
+
+ -- Maintainer <maint@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let entries: Vec<_> = changelog.iter().collect();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].package(), Some("foo".to_string()));
+        assert_eq!(entries[0].version(), Some("1.0-1".parse().unwrap()));
+        assert!(entries[0].get_maintainer_identity().is_none());
+
+        assert_eq!(entries[1].package(), Some("bar".to_string()));
+        assert_eq!(entries[1].version(), Some("2.0-1".parse().unwrap()));
+        let identity = entries[1].get_maintainer_identity().unwrap();
+        assert_eq!(identity.name, "Maintainer");
+        assert_eq!(identity.email, "maint@example.com");
+    }
+
+    #[test]
+    fn test_parse_entry_missing_footer_no_blank_line() {
+        // When a single entry is missing a footer and there's no blank line
+        // before the next entry, subsequent entries should still be parsed.
+        let changelog: ChangeLog = "foo (1.0-1) unstable; urgency=low\n\n  * First change\nbar (2.0-1) unstable; urgency=low\n\n  * Second change\n\n -- Maintainer <maint@example.com>  Mon, 04 Sep 2023 18:13:45 -0500\n"
+        .parse()
+        .unwrap();
+
+        let entries: Vec<_> = changelog.iter().collect();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].package(), Some("foo".to_string()));
+        assert!(entries[0].get_maintainer_identity().is_none());
+
+        assert_eq!(entries[1].package(), Some("bar".to_string()));
+        let identity = entries[1].get_maintainer_identity().unwrap();
+        assert_eq!(identity.name, "Maintainer");
+        assert_eq!(identity.email, "maint@example.com");
+    }
+
+    #[test]
+    fn test_parse_entry_trailing_space_instead_of_footer() {
+        // Entry has " \n" (trailing space line) instead of a proper footer.
+        // The parser should recover and still parse the second entry.
+        let parsed = ChangeLog::parse("foo (42.0.5-1) unstable; urgency=medium\n\n  * Team upload.\n  * detail\n\n \n\nbar (41.0.7-5) unstable; urgency=medium\n\n  * AMAU\n\n -- Name <email@example.com>  Thu, 07 Mar 2024 13:42:35 +0100\n");
+        let changelog: ChangeLog = parsed.tree();
+
+        let entries: Vec<_> = changelog.iter().collect();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].package(), Some("foo".to_string()));
+        assert!(entries[0].get_maintainer_identity().is_none());
+
+        assert_eq!(entries[1].package(), Some("bar".to_string()));
+        let identity = entries[1].get_maintainer_identity().unwrap();
+        assert_eq!(identity.name, "Name");
+        assert_eq!(identity.email, "email@example.com");
+    }
+
+    #[test]
+    fn test_parse_middle_entry_missing_footer() {
+        // Three entries, middle one missing footer
+        let changelog: ChangeLog = r#"foo (3.0-1) unstable; urgency=low
+
+  * Third change
+
+ -- Alice <alice@example.com>  Mon, 04 Sep 2023 18:13:45 -0500
+
+bar (2.0-1) unstable; urgency=low
+
+  * Second change (no footer)
+
+baz (1.0-1) unstable; urgency=low
+
+  * First change
+
+ -- Bob <bob@example.com>  Sat, 02 Sep 2023 16:11:15 -0500
+"#
+        .parse()
+        .unwrap();
+
+        let entries: Vec<_> = changelog.iter().collect();
+        assert_eq!(entries.len(), 3);
+
+        assert_eq!(entries[0].package(), Some("foo".to_string()));
+        let identity = entries[0].get_maintainer_identity().unwrap();
+        assert_eq!(identity.name, "Alice");
+
+        assert_eq!(entries[1].package(), Some("bar".to_string()));
+        assert!(entries[1].get_maintainer_identity().is_none());
+
+        assert_eq!(entries[2].package(), Some("baz".to_string()));
+        let identity = entries[2].get_maintainer_identity().unwrap();
+        assert_eq!(identity.name, "Bob");
+    }
+
+    #[test]
+    fn test_parse_real_world_malformed_footer() {
+        // Real-world case: first entry has an empty bullet ("  * \n") and a
+        // truncated footer line (" \n") instead of " -- maintainer <email>  date".
+        // The second entry has a proper footer. Both should be parsed.
+        let input = concat!(
+            "python-cryptography (42.0.5-1) unstable; urgency=medium\n",
+            "\n",
+            "  * Team upload.\n",
+            "  * Bump setuptools-rust\n",
+            "\n",
+            "  [ Andreas Tille ]\n",
+            "  * New upstream version\n",
+            "\n",
+            "  [ Andrey Rakhmatullin ]\n",
+            "  * Add myself to Uploaders.\n",
+            "  * \n",
+            "\n",
+            "  [ Jérémy Lal ]\n",
+            "  * Testsuite: autopkgtest-pkg-pybuild\n",
+            "\n",
+            " \n",
+            "\n",
+            "python-cryptography (41.0.7-5) unstable; urgency=medium\n",
+            "\n",
+            "  * AMAU, Closes: #1064979\n",
+            "\n",
+            "  [ Andreas Tille ]\n",
+            "  * Enable building twice in a row\n",
+            "\n",
+            " -- Jérémy Lal <kapouer@melix.org>  Thu, 07 Mar 2024 13:42:35 +0100\n",
+        );
+        let parsed = ChangeLog::parse(input);
+        assert!(!parsed.errors().is_empty());
+        let changelog: ChangeLog = parsed.tree();
+
+        let entries: Vec<_> = changelog.iter().collect();
+        assert_eq!(entries.len(), 2);
+
+        assert_eq!(
+            entries[0].package(),
+            Some("python-cryptography".to_string())
+        );
+        assert_eq!(
+            entries[0].version(),
+            Some("42.0.5-1".parse().unwrap())
+        );
+        assert!(entries[0].get_maintainer_identity().is_none());
+
+        assert_eq!(
+            entries[1].package(),
+            Some("python-cryptography".to_string())
+        );
+        assert_eq!(
+            entries[1].version(),
+            Some("41.0.7-5".parse().unwrap())
+        );
+        let identity = entries[1].get_maintainer_identity().unwrap();
+        assert_eq!(identity.name, "Jérémy Lal");
+        assert_eq!(identity.email, "kapouer@melix.org");
     }
 }
