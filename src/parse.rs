@@ -165,7 +165,7 @@ use rowan::GreenNodeBuilder;
 #[derive(Debug)]
 pub struct Parse<T> {
     green: GreenNode,
-    errors: Vec<String>,
+    errors: Vec<(String, rowan::TextSize)>,
     _ty: std::marker::PhantomData<T>,
 }
 
@@ -195,7 +195,7 @@ unsafe impl<T> Sync for Parse<T> {}
 
 impl<T> Parse<T> {
     /// Create a new Parse result from a GreenNode and errors
-    pub fn new(green: GreenNode, errors: Vec<String>) -> Self {
+    pub fn new(green: GreenNode, errors: Vec<(String, rowan::TextSize)>) -> Self {
         Parse {
             green,
             errors,
@@ -208,8 +208,13 @@ impl<T> Parse<T> {
         &self.green
     }
 
-    /// Get the syntax errors
-    pub fn errors(&self) -> &[String] {
+    /// Get the syntax error messages.
+    pub fn errors(&self) -> Vec<&str> {
+        self.errors.iter().map(|(msg, _)| msg.as_str()).collect()
+    }
+
+    /// Get the syntax errors with their byte offsets.
+    pub fn errors_with_offsets(&self) -> &[(String, rowan::TextSize)] {
         &self.errors
     }
 
@@ -227,7 +232,9 @@ impl<T> Parse<T> {
             let node = SyntaxNode::new_root(self.green);
             Ok(T::cast(node).expect("root node has wrong type"))
         } else {
-            Err(ParseError(self.errors))
+            Err(ParseError(
+                self.errors.into_iter().map(|(msg, _)| msg).collect(),
+            ))
         }
     }
 
@@ -240,7 +247,9 @@ impl<T> Parse<T> {
             let node = SyntaxNode::new_root_mut(self.green);
             Ok(T::cast(node).expect("root node has wrong type"))
         } else {
-            Err(ParseError(self.errors))
+            Err(ParseError(
+                self.errors.into_iter().map(|(msg, _)| msg).collect(),
+            ))
         }
     }
 
@@ -319,15 +328,16 @@ impl Parse<ChangeLog> {
 
         // In old-text coordinates, the edit covered:
         let old_edit_start = edit.start();
-        let old_edit_end =
-            TextSize::from((i64::from(u32::from(edit.end())) - len_delta) as u32);
+        let old_edit_end = TextSize::from((i64::from(u32::from(edit.end())) - len_delta) as u32);
 
         // Find first and last affected child indices.
         // Use >= / <= to catch inserts at child boundaries.
-        let first_affected =
-            children.iter().position(|(_, _, end)| *end >= old_edit_start);
-        let last_affected =
-            children.iter().rposition(|(_, start, _)| *start <= old_edit_end);
+        let first_affected = children
+            .iter()
+            .position(|(_, _, end)| *end >= old_edit_start);
+        let last_affected = children
+            .iter()
+            .rposition(|(_, start, _)| *start <= old_edit_end);
 
         let (first_affected, last_affected) = match (first_affected, last_affected) {
             (Some(f), Some(l)) => (f, l),
@@ -348,8 +358,7 @@ impl Parse<ChangeLog> {
             return parse(new_text);
         }
 
-        let reparse_slice =
-            &new_text[usize::from(reparse_start)..usize::from(reparse_new_end)];
+        let reparse_slice = &new_text[usize::from(reparse_start)..usize::from(reparse_new_end)];
 
         // Parse just the affected region
         let reparsed = parse(reparse_slice);
@@ -381,14 +390,33 @@ impl Parse<ChangeLog> {
             new_root_children.push(to_owned(c));
         }
 
-        let new_green = GreenNode::new(
-            rowan::SyntaxKind(ROOT as u16),
-            new_root_children,
-        );
+        let new_green = GreenNode::new(rowan::SyntaxKind(ROOT as u16), new_root_children);
 
-        // Errors: use reparsed errors only (shifted to absolute positions).
-        // TODO: preserve prefix/suffix errors with shifted offsets.
-        let errors = reparsed.errors;
+        // Build the error list by combining:
+        // 1. Prefix errors: original errors before the affected region (unchanged)
+        // 2. Reparsed errors: shifted to absolute positions by adding reparse_start
+        // 3. Suffix errors: original errors after the affected region, shifted by len_delta
+        let mut errors = Vec::new();
+
+        // Prefix errors (before the affected region, offsets unchanged)
+        for (msg, offset) in &self.errors {
+            if *offset < reparse_start {
+                errors.push((msg.clone(), *offset));
+            }
+        }
+
+        // Reparsed errors (shift from slice-local to absolute positions)
+        for (msg, offset) in reparsed.errors {
+            errors.push((msg, offset + reparse_start));
+        }
+
+        // Suffix errors (after the affected region, shift by len_delta)
+        for (msg, offset) in &self.errors {
+            if *offset >= reparse_old_end {
+                let new_offset = TextSize::from((i64::from(u32::from(*offset)) + len_delta) as u32);
+                errors.push((msg.clone(), new_offset));
+            }
+        }
 
         Parse::new(new_green, errors)
     }
@@ -402,17 +430,20 @@ fn parse(text: &str) -> Parse<ChangeLog> {
         /// the in-progress tree.
         builder: GreenNodeBuilder<'static>,
         /// the list of syntax errors we've accumulated
-        /// so far.
-        errors: Vec<String>,
+        /// so far, with their byte offsets.
+        errors: Vec<(String, rowan::TextSize)>,
+        /// current byte offset in the input text.
+        text_offset: rowan::TextSize,
     }
 
     impl Parser {
         fn error(&mut self, msg: String) {
+            let offset = self.text_offset;
             self.builder.start_node(ERROR.into());
             if self.current().is_some() {
                 self.bump();
             }
-            self.errors.push(msg);
+            self.errors.push((msg, offset));
             self.builder.finish_node();
         }
 
@@ -683,6 +714,7 @@ fn parse(text: &str) -> Parse<ChangeLog> {
         /// Advance one token, adding it to the current branch of the tree builder.
         fn bump(&mut self) {
             let (kind, text) = self.tokens.pop().unwrap();
+            self.text_offset += rowan::TextSize::of(text.as_str());
             self.builder.token(kind.into(), text.as_str());
         }
         /// Peek at the first unprocessed token
@@ -716,6 +748,7 @@ fn parse(text: &str) -> Parse<ChangeLog> {
         tokens,
         builder: GreenNodeBuilder::new(),
         errors: Vec::new(),
+        text_offset: rowan::TextSize::from(0),
     }
     .parse()
 }
@@ -2500,7 +2533,7 @@ breezy (3.3.3-2) unstable; urgency=medium
 # Oh, and here is a comment
 "#;
         let parsed = parse(CHANGELOG);
-        assert_eq!(parsed.errors(), &Vec::<String>::new());
+        assert!(parsed.errors().is_empty());
         let node = parsed.syntax_node();
         assert_eq!(
             format!("{:#?}", node),
@@ -3420,7 +3453,7 @@ breezy (3.3.3-1) unstable; urgency=low
 "#;
 
         let parsed = parse(CHANGELOG);
-        assert_eq!(parsed.errors(), &Vec::<String>::new());
+        assert!(parsed.errors().is_empty());
 
         let root = parsed.tree();
         let entries: Vec<_> = root.iter().collect();
@@ -3452,7 +3485,7 @@ breezy (3.3.3-1) unstable; urgency=low
         if !parsed.errors().is_empty() {
             eprintln!("Parse errors: {:?}", parsed.errors());
         }
-        assert_eq!(parsed.errors(), &Vec::<String>::new());
+        assert!(parsed.errors().is_empty());
 
         let root = parsed.tree();
         let entries: Vec<_> = root.iter().collect();
@@ -3941,8 +3974,7 @@ baz (3.0-1) unstable; urgency=medium
         // Test range starting in the middle of first entry and ending in the middle of second
         let first_change_offset = text.find("First change").unwrap() as u32;
         let second_change_offset = text.find("Second change").unwrap() as u32;
-        let range =
-            rowan::TextRange::new(first_change_offset.into(), second_change_offset.into());
+        let range = rowan::TextRange::new(first_change_offset.into(), second_change_offset.into());
         let entries: Vec<_> = changelog.entries_in_range(range).collect();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].package(), Some("foo".to_string()));
@@ -4153,20 +4185,14 @@ baz (1.0-1) unstable; urgency=low
             entries[0].package(),
             Some("python-cryptography".to_string())
         );
-        assert_eq!(
-            entries[0].version(),
-            Some("42.0.5-1".parse().unwrap())
-        );
+        assert_eq!(entries[0].version(), Some("42.0.5-1".parse().unwrap()));
         assert!(entries[0].get_maintainer_identity().is_none());
 
         assert_eq!(
             entries[1].package(),
             Some("python-cryptography".to_string())
         );
-        assert_eq!(
-            entries[1].version(),
-            Some("41.0.7-5".parse().unwrap())
-        );
+        assert_eq!(entries[1].version(), Some("41.0.7-5".parse().unwrap()));
         let identity = entries[1].get_maintainer_identity().unwrap();
         assert_eq!(identity.name, "Jérémy Lal");
         assert_eq!(identity.email, "kapouer@melix.org");
@@ -4244,7 +4270,8 @@ breezy (3.3.3-2) unstable; urgency=medium
     fn test_reparse_add_detail_line() {
         let old = TWO_ENTRY_CHANGELOG;
         // Insert a new detail line after "New upstream release.\n"
-        let insert_point = old.find("  * New upstream release.\n").unwrap() + "  * New upstream release.\n".len();
+        let insert_point =
+            old.find("  * New upstream release.\n").unwrap() + "  * New upstream release.\n".len();
         assert_incremental_matches_full(
             old,
             insert_point as u32,
