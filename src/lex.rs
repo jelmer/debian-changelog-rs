@@ -81,8 +81,12 @@ impl<'a> Lexer<'a> {
                 (c, None) if Self::is_whitespace(c) => {
                     let mut indent = self.read_while_n(2, |c| c == ' ');
                     if indent.len() == 1 {
-                        let dashes = self.read_while(|c| c == '-' || c == ' ');
+                        let dashes = self.read_while(|c| c == '-');
                         indent.push_str(dashes.as_str());
+                        // Read exactly one trailing space after the dashes
+                        if self.input.peek() == Some(&' ') {
+                            indent.push(self.input.next().unwrap());
+                        }
                         self.line_type = Some(LineType::Footer);
                     } else {
                         self.line_type = Some(LineType::Body);
@@ -289,6 +293,35 @@ mod tests {
                 .map(|(kind, text)| (*kind, text.as_str()))
                 .collect::<Vec<_>>(),
             vec![(INDENT, " -- "), (TEXT, "Name123-test"),]
+        );
+    }
+
+    #[test]
+    fn test_footer_no_maintainer_name() {
+        // Footer with no maintainer name (extra space before email)
+        assert_eq!(
+            super::lex(" --  <atterer@debian.org>  Wed, 17 Mar 2004 15:12:21 +0100\n")
+                .iter()
+                .map(|(kind, text)| (*kind, text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (INDENT, " -- "),
+                (WHITESPACE, " "),
+                (EMAIL, "<atterer@debian.org>"),
+                (WHITESPACE, "  "),
+                (TEXT, "Wed,"),
+                (WHITESPACE, " "),
+                (TEXT, "17"),
+                (WHITESPACE, " "),
+                (TEXT, "Mar"),
+                (WHITESPACE, " "),
+                (TEXT, "2004"),
+                (WHITESPACE, " "),
+                (TEXT, "15:12:21"),
+                (WHITESPACE, " "),
+                (TEXT, "+0100"),
+                (NEWLINE, "\n"),
+            ]
         );
     }
 
