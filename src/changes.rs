@@ -571,15 +571,24 @@ pub fn find_closed_debian_bugs(changes: &[&str]) -> std::collections::HashSet<u3
     let regex = lazy_regex::regex!(r"[Cc]loses:\s*[#\d\s,]+");
     let bug_regex = lazy_regex::regex!(r"\d+");
 
-    changes_by_author(changes.iter().copied())
-        .flat_map(|(_, _, lines)| {
-            lines.into_iter().flat_map(|line| {
-                regex.find_iter(line).flat_map(|closes_match| {
-                    let closes_text = closes_match.as_str();
-                    bug_regex
-                        .find_iter(closes_text)
-                        .filter_map(|m| m.as_str().parse::<u32>().ok())
-                })
+    changes_sections(changes.iter().copied())
+        .flat_map(|section| {
+            section.changes.into_iter().flat_map(|entry| {
+                let joined = entry
+                    .iter()
+                    .map(|(_, line)| *line)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                regex
+                    .find_iter(&joined)
+                    .flat_map(|closes_match| {
+                        let closes_text = closes_match.as_str();
+                        bug_regex
+                            .find_iter(closes_text)
+                            .filter_map(|m| m.as_str().parse::<u32>().ok())
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>()
             })
         })
         .collect()
@@ -600,15 +609,24 @@ pub fn find_closed_launchpad_bugs(changes: &[&str]) -> std::collections::HashSet
     let regex = lazy_regex::regex!(r"[Ll][Pp]:\s*[#\d\s,]+");
     let bug_regex = lazy_regex::regex!(r"\d+");
 
-    changes_by_author(changes.iter().copied())
-        .flat_map(|(_, _, lines)| {
-            lines.into_iter().flat_map(|line| {
-                regex.find_iter(line).flat_map(|lp_match| {
-                    let lp_text = lp_match.as_str();
-                    bug_regex
-                        .find_iter(lp_text)
-                        .filter_map(|m| m.as_str().parse::<u32>().ok())
-                })
+    changes_sections(changes.iter().copied())
+        .flat_map(|section| {
+            section.changes.into_iter().flat_map(|entry| {
+                let joined = entry
+                    .iter()
+                    .map(|(_, line)| *line)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                regex
+                    .find_iter(&joined)
+                    .flat_map(|lp_match| {
+                        let lp_text = lp_match.as_str();
+                        bug_regex
+                            .find_iter(lp_text)
+                            .filter_map(|m| m.as_str().parse::<u32>().ok())
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>()
             })
         })
         .collect()
@@ -669,6 +687,23 @@ fn test_find_closed_debian_bugs() {
     assert_eq!(
         find_closed_debian_bugs(&["* Fix bug. (Closes: #123456)"]),
         maplit::hashset! {123456}
+    );
+    // Bug number on continuation line
+    assert_eq!(
+        find_closed_debian_bugs(&[
+            "  * no-priority-field fixer: stop adding \"Priority: optional\" when",
+            "    targeting dpkg >= 1.22.13, since it is now the default. Closes:",
+            "    #1128554"
+        ]),
+        maplit::hashset! {1128554}
+    );
+    // Closes: with multiple bugs split across lines
+    assert_eq!(
+        find_closed_debian_bugs(&[
+            "  * Fix several issues. Closes: #123456,",
+            "    #789012"
+        ]),
+        maplit::hashset! {123456, 789012}
     );
 }
 
