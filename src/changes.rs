@@ -568,30 +568,7 @@ fn test_find_thanks() {
 /// assert!(bugs.contains(&123456));
 /// ```
 pub fn find_closed_debian_bugs(changes: &[&str]) -> std::collections::HashSet<u32> {
-    let regex = lazy_regex::regex!(r"[Cc]loses:\s*[#\d\s,]+");
-    let bug_regex = lazy_regex::regex!(r"\d+");
-
-    changes_sections(changes.iter().copied())
-        .flat_map(|section| {
-            section.changes.into_iter().flat_map(|entry| {
-                let joined = entry
-                    .iter()
-                    .map(|(_, line)| *line)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                regex
-                    .find_iter(&joined)
-                    .flat_map(|closes_match| {
-                        let closes_text = closes_match.as_str();
-                        bug_regex
-                            .find_iter(closes_text)
-                            .filter_map(|m| m.as_str().parse::<u32>().ok())
-                            .collect::<Vec<_>>()
-                    })
-                    .collect::<Vec<_>>()
-            })
-        })
-        .collect()
+    find_closed_bugs_for_marker(changes, lazy_regex::regex!(r"[Cc]loses:\s*[#\d\s,]+"))
 }
 
 /// Find Launchpad bugs that are closed in a changelog entry
@@ -606,7 +583,13 @@ pub fn find_closed_debian_bugs(changes: &[&str]) -> std::collections::HashSet<u3
 /// assert!(bugs.contains(&123456));
 /// ```
 pub fn find_closed_launchpad_bugs(changes: &[&str]) -> std::collections::HashSet<u32> {
-    let regex = lazy_regex::regex!(r"[Ll][Pp]:\s*[#\d\s,]+");
+    find_closed_bugs_for_marker(changes, lazy_regex::regex!(r"[Ll][Pp]:\s*[#\d\s,]+"))
+}
+
+fn find_closed_bugs_for_marker(
+    changes: &[&str],
+    marker_regex: &lazy_regex::Regex,
+) -> std::collections::HashSet<u32> {
     let bug_regex = lazy_regex::regex!(r"\d+");
 
     changes_sections(changes.iter().copied())
@@ -617,13 +600,12 @@ pub fn find_closed_launchpad_bugs(changes: &[&str]) -> std::collections::HashSet
                     .map(|(_, line)| *line)
                     .collect::<Vec<_>>()
                     .join(" ");
-                regex
+                marker_regex
                     .find_iter(&joined)
-                    .flat_map(|lp_match| {
-                        let lp_text = lp_match.as_str();
+                    .flat_map(|m| {
                         bug_regex
-                            .find_iter(lp_text)
-                            .filter_map(|m| m.as_str().parse::<u32>().ok())
+                            .find_iter(m.as_str())
+                            .filter_map(|d| d.as_str().parse::<u32>().ok())
                             .collect::<Vec<_>>()
                     })
                     .collect::<Vec<_>>()
@@ -631,6 +613,11 @@ pub fn find_closed_launchpad_bugs(changes: &[&str]) -> std::collections::HashSet
         })
         .collect()
 }
+
+// Bug reference types and offset-based lookups have moved to crate::bugs.
+
+// Re-export for backwards compatibility.
+pub use crate::bugs::{Bug, BugRefSpan, BugTracker};
 
 /// Check if all lines in a changelog entry are prefixed with a sha.
 ///
@@ -699,10 +686,7 @@ fn test_find_closed_debian_bugs() {
     );
     // Closes: with multiple bugs split across lines
     assert_eq!(
-        find_closed_debian_bugs(&[
-            "  * Fix several issues. Closes: #123456,",
-            "    #789012"
-        ]),
+        find_closed_debian_bugs(&["  * Fix several issues. Closes: #123456,", "    #789012"]),
         maplit::hashset! {123456, 789012}
     );
 }
