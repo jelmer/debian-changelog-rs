@@ -26,6 +26,7 @@
 mod lex;
 mod parse;
 use lazy_regex::regex_captures;
+pub mod bugs;
 pub mod changes;
 pub mod textwrap;
 use crate::parse::{SyntaxNode, SyntaxToken};

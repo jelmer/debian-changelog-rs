@@ -2488,6 +2488,66 @@ impl Entry {
         self.try_add_changes_for_author(author_name, changes)
             .unwrap()
     }
+
+    /// Find the bug reference at the given absolute byte offset.
+    ///
+    /// Returns `Some(Bug)` when the cursor sits on a bug number inside a
+    /// `Closes: #...` or `LP: #...` pattern in a detail line.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use debian_changelog::changes::Bug;
+    /// use rowan::ast::AstNode;
+    ///
+    /// let text = "pkg (1.0-1) unstable; urgency=low\n\n  * Fix. (Closes: #42)\n\n -- T <t@t>  Mon, 01 Jan 2024 00:00:00 +0000\n";
+    /// let parsed = debian_changelog::ChangeLog::parse(text);
+    /// let changelog = parsed.tree();
+    /// let offset = rowan::TextSize::from(text.find("#42").unwrap() as u32 + 1);
+    /// let entry = changelog.entry_at_offset(offset).unwrap();
+    /// assert_eq!(entry.bug_at_offset(offset), Some(Bug::Debian(42)));
+    /// ```
+    pub fn bug_at_offset(&self, offset: rowan::TextSize) -> Option<crate::bugs::Bug> {
+        let detail = self.detail_token_at_offset(offset)?;
+        let start: usize = detail.text_range().start().into();
+        crate::bugs::bug_at_offset(detail.text(), start, offset.into())
+    }
+
+    /// Find the bug number prefix being typed at the given absolute byte offset.
+    ///
+    /// Returns the bug tracker variant and the digit prefix typed so far,
+    /// useful for completion.  Returns `None` when the cursor is not in a
+    /// bug-reference context.
+    pub fn bug_prefix_at_offset(
+        &self,
+        offset: rowan::TextSize,
+    ) -> Option<(crate::bugs::BugTracker, String)> {
+        let detail = self.detail_token_at_offset(offset)?;
+        let start: usize = detail.text_range().start().into();
+        crate::bugs::bug_prefix_at_offset(detail.text(), start, offset.into())
+    }
+
+    /// Find the DETAIL token at the given offset within this entry.
+    fn detail_token_at_offset(&self, offset: rowan::TextSize) -> Option<SyntaxToken> {
+        let token = match self.syntax().token_at_offset(offset) {
+            rowan::TokenAtOffset::Single(token) => Some(token),
+            rowan::TokenAtOffset::Between(left, right) => {
+                if left.kind() == DETAIL {
+                    Some(left)
+                } else if right.kind() == DETAIL {
+                    Some(right)
+                } else {
+                    None
+                }
+            }
+            rowan::TokenAtOffset::None => None,
+        }?;
+        if token.kind() == DETAIL {
+            Some(token)
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(feature = "chrono")]
