@@ -7,7 +7,6 @@
 //! - Prefix lookups at a byte offset (for completion)
 //! - Full span detection (for semantic highlighting)
 
-
 /// Which bug tracker a reference belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BugTracker {
@@ -63,7 +62,6 @@ pub struct BugRefSpan {
     /// or marker with no bug numbers yet).
     pub continues: bool,
 }
-
 
 /// Known bug-reference markers (case-insensitive), in scan order.
 const MARKERS: &[(BugTracker, &str)] = &[
@@ -128,7 +126,6 @@ fn to_relative(detail_start: usize, detail_len: usize, offset: usize) -> Option<
     Some(std::cmp::min(offset - detail_start, detail_len))
 }
 
-
 /// Find the bug reference at a byte offset within a single detail line.
 ///
 /// `detail_text` is the text of the DETAIL token, `detail_start` is its
@@ -180,7 +177,6 @@ pub fn bug_at_offset(detail_text: &str, detail_start: usize, offset: usize) -> O
     None
 }
 
-
 /// Find the bug-number prefix being typed at a byte offset.
 ///
 /// Returns the tracker and the digit prefix typed so far, useful for
@@ -230,7 +226,6 @@ pub fn bug_prefix_at_offset(
 
     Some((tracker, digits.to_string()))
 }
-
 
 /// Find all bug reference spans in a detail line.
 ///
@@ -309,7 +304,6 @@ fn continuation_span(detail_text: &str) -> Option<BugRefSpan> {
         continues: reaches_eol && trailing_comma,
     })
 }
-
 
 #[cfg(test)]
 mod tests {
