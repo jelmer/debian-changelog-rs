@@ -42,10 +42,10 @@ where
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
 /// Urgency of the changes in the changelog entry
 pub enum Urgency {
-    #[default]
     /// Low urgency
     Low,
 
+    #[default]
     /// Medium urgency
     Medium,
 
@@ -2799,7 +2799,7 @@ breezy (3.3.3-2) unstable; urgency=medium
             .datetime("Mon, 04 Sep 2023 18:13:45 -0500")
             .finish();
         assert_eq!(
-            r###"breezy (3.3.4-1) UNRELEASED; urgency=low
+            r###"breezy (3.3.4-1) UNRELEASED; urgency=medium
 
   * A change.
 
