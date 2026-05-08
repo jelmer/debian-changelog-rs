@@ -1385,15 +1385,19 @@ impl ChangeLog {
         Ok(buf.parse()?)
     }
 
+    /// Parse changelog text, returning a ChangeLog, ignoring any errors.
+    pub fn parse_relaxed(text: &str) -> ChangeLog {
+        let parsed = parse(text);
+        let node = SyntaxNode::new_root(parsed.green);
+        ChangeLog::cast(node).unwrap_or_else(ChangeLog::new)
+    }
+
     /// Read a changelog file from a reader, allowing for syntax errors
     pub fn read_relaxed<R: std::io::Read>(mut r: R) -> Result<ChangeLog, Error> {
         let mut buf = String::new();
         r.read_to_string(&mut buf)?;
 
-        let parsed = parse(&buf);
-        // For relaxed parsing, we ignore errors and return the tree anyway
-        let node = SyntaxNode::new_root_mut(parsed.green().clone());
-        Ok(ChangeLog::cast(node).expect("root node has wrong type"))
+        Ok(Self::parse_relaxed(&buf))
     }
 
     /// Write the changelog to a writer

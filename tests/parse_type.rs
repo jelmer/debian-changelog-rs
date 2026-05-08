@@ -179,6 +179,21 @@ fn test_parse_inequality_different_errors() {
 }
 
 #[test]
+fn test_parse_empty_string() {
+    let parsed = ChangeLog::parse("");
+    assert!(parsed.errors().is_empty());
+    let tree = parsed.tree();
+    assert_eq!(tree.iter().count(), 0);
+}
+
+#[test]
+fn test_parse_relaxed_non_panicking() {
+    let cl = ChangeLog::parse_relaxed("INVALID");
+    // "INVALID" might be parsed as an identifier for an entry
+    let _ = cl.iter().count();
+}
+
+#[test]
 fn test_invalid_version_no_panic() {
     // Test with an invalid version string that should not panic
     let changelog_text = r#"test (2.0.37+cvs.JCW_PRE2_2037-1) unstable; urgency=low
