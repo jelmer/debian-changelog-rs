@@ -1388,7 +1388,7 @@ impl ChangeLog {
     /// Parse changelog text, returning a ChangeLog, ignoring any errors.
     pub fn parse_relaxed(text: &str) -> ChangeLog {
         let parsed = parse(text);
-        let node = SyntaxNode::new_root(parsed.green);
+        let node = SyntaxNode::new_root_mut(parsed.green);
         ChangeLog::cast(node).unwrap_or_else(ChangeLog::new)
     }
 
